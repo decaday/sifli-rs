@@ -11,21 +11,23 @@ mod macros;
 
 mod utils;
 
-pub mod rcc;
-pub mod gpio;
-pub mod timer;
-pub mod time;
-pub mod pmu;
-#[allow(clippy::all)] // modified from embassy-stm32
-pub mod usart;
 pub mod adc;
-pub mod lcdc;
 #[allow(clippy::all)] // modified from embassy-stm32
 pub mod dma;
-#[cfg(feature = "usb")]
-pub mod usb;
+pub mod efuse;
+pub mod gpio;
+pub mod lcdc;
+pub mod pmu;
+pub mod rcc;
+pub mod syscfg;
+pub mod time;
 #[cfg(feature = "_time-driver")]
 pub mod time_driver;
+pub mod timer;
+#[allow(clippy::all)] // modified from embassy-stm32
+pub mod usart;
+#[cfg(feature = "usb")]
+pub mod usb;
 
 // Reexports
 pub use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
@@ -60,8 +62,8 @@ pub mod mode {
 
 /// HAL configuration for SiFli
 pub mod config {
-    use crate::rcc;
     use crate::interrupt;
+    use crate::rcc;
 
     /// HAL configuration passed when initializing.
     #[non_exhaustive]
@@ -98,12 +100,11 @@ pub fn init(config: Config) -> Peripherals {
 
         #[cfg(feature = "_time-driver")]
         time_driver::init();
-        
+
         gpio::init(config.gpio1_it_priority);
         critical_section::with(|cs| {
             dma::init(cs);
         });
-        
     }
     p
 }
@@ -113,9 +114,7 @@ fn system_init() {
         let mut cp = cortex_m::Peripherals::steal();
 
         // enable CP0/CP1/CP2 Full Access
-        cp.SCB.cpacr.modify(|r| {
-            r | (0b111111)
-        });
+        cp.SCB.cpacr.modify(|r| r | (0b111111));
 
         // Enable Cache
         cp.SCB.enable_icache();
@@ -221,3 +220,4 @@ global_asm!(
     "    bx lr",
     ".size __pre_init, . - __pre_init"
 );
+
