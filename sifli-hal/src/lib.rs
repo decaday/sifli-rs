@@ -16,6 +16,7 @@ pub mod gpio;
 pub mod timer;
 pub mod time;
 pub mod pmu;
+pub mod patch;
 #[allow(clippy::all)] // modified from embassy-stm32
 pub mod usart;
 pub mod adc;
