@@ -27,6 +27,10 @@ pub mod dma;
 #[cfg(feature = "usb")]
 pub mod usb;
 pub mod efuse;
+pub mod lcpu_img;
+pub mod lcpu;
+pub mod lpaon;
+pub mod hpaon;
 #[cfg(feature = "_time-driver")]
 pub mod time_driver;
 
