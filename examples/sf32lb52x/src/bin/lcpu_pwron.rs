@@ -8,7 +8,7 @@ use embassy_time::Timer;
 use panic_probe as _;
 
 use sifli_hal::gpio;
-use sifli_hal::lcpu::{self, LcpuConfig, PatchData};
+use sifli_hal::lcpu::{Lcpu, LcpuConfig, PatchData};
 
 #[path = "../patch_data.rs"]
 mod patch_data;
@@ -27,6 +27,8 @@ async fn main(_spawner: Spawner) {
 
     info!("Starting LCPU power-on example");
 
+    let lcpu = Lcpu::new().into_async();
+
     let cfg = LcpuConfig::new()
         .with_firmware(&lcpu_image_52x::G_LCPU_BIN_U32)
         .with_patch_a3(PatchData {
@@ -39,7 +41,7 @@ async fn main(_spawner: Spawner) {
         })
         .disable_rf_cal();
 
-    match lcpu::power_on(&cfg).await {
+    match lcpu.power_on(&cfg).await {
         Ok(()) => info!("LCPU power-on succeeded"),
         Err(e) => {
             warn!("LCPU power-on failed: {:?}", e);

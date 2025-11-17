@@ -3,16 +3,20 @@
 //! Typical async usage:
 //!
 //! ```no_run
-//! use sifli_hal::lcpu::{self, LcpuConfig};
+//! use sifli_hal::lcpu::{Lcpu, LcpuConfig};
 //!
 //! # async fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
 //! let cfg = LcpuConfig::new();
-//! lcpu::power_on(&cfg).await?;
+//! let lcpu = Lcpu::new().into_async();
+//! lcpu.power_on(&cfg).await?;
 //! # Ok(()) }
 //! ```
 
 // Re-export related items
 pub use crate::lcpu_img::{self, LCPU_CODE_START_ADDR, LPSYS_RAM_BASE, LPSYS_RAM_SIZE};
+
+use core::marker::PhantomData;
+use core::sync::atomic::{AtomicU8, Ordering};
 
 use crate::lpaon;
 use crate::patch;
@@ -173,10 +177,37 @@ pub enum CoreId {
 }
 
 //=============================================================================
-// LCPU active guard and reference counting
+// LCPU driver type
 //=============================================================================
 
-use core::sync::atomic::{AtomicU8, Ordering};
+/// LCPU driver type, parameterized by operation mode (Async / Blocking).
+#[derive(Debug, Clone, Copy)]
+pub struct Lcpu<M: crate::mode::Mode> {
+    _mode: PhantomData<fn() -> M>,
+}
+
+impl Lcpu<crate::mode::Blocking> {
+    /// Create a new blocking LCPU driver instance.
+    pub const fn new() -> Self {
+        Self { _mode: PhantomData }
+    }
+
+    /// Convert the blocking driver into an async driver.
+    pub const fn into_async(self) -> Lcpu<crate::mode::Async> {
+        Lcpu { _mode: PhantomData }
+    }
+}
+
+impl<M: crate::mode::Mode> Default for Lcpu<M> {
+    fn default() -> Self {
+        // Default instance mirrors `new()` semantics.
+        Lcpu { _mode: PhantomData }
+    }
+}
+
+//=============================================================================
+// LCPU wake guard and reference counting
+//=============================================================================
 
 /// LCPU wake reference counter.
 ///
@@ -187,24 +218,24 @@ static LCPU_WAKEUP_REF_CNT: AtomicU8 = AtomicU8::new(0);
 /// Maximum allowed wake reference count (from SDK).
 const MAX_REF_COUNT: u8 = 20;
 
-/// LCPU active guard (RAII).
+/// LCPU wake guard (RAII).
 ///
 /// Wakes LCPU on creation (if needed) and decrements the wake reference
 /// count on drop, clearing the wake request when the last guard is dropped.
 ///
 /// ```no_run
-/// use sifli_hal::lcpu::LcpuActiveGuard;
+/// use sifli_hal::lcpu::WakeGuard;
 ///
 /// # async fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
-/// let _guard = LcpuActiveGuard::new().await?;
+/// let _guard = WakeGuard::new().await?;
 /// # Ok(()) }
 /// ```
-pub struct LcpuActiveGuard {
+pub struct WakeGuard {
     _private: (),
 }
 
-impl LcpuActiveGuard {
-    /// Create an async LCPU active guard; wakes LCPU on first use.
+impl WakeGuard {
+    /// Create an async LCPU wake guard; wakes LCPU on first use.
     pub async fn new() -> Result<Self, LcpuError> {
         // 1. Atomically increment wake reference count.
         let prev_count = critical_section::with(|_| {
@@ -248,7 +279,7 @@ impl LcpuActiveGuard {
         Ok(Self { _private: () })
     }
 
-    /// Blocking version of [`LcpuActiveGuard::new`].
+    /// Blocking version of [`WakeGuard::new`].
     pub fn new_blocking() -> Result<Self, LcpuError> {
         // 1. Atomically increment wake reference count.
         let prev_count = critical_section::with(|_| {
@@ -291,7 +322,7 @@ impl LcpuActiveGuard {
     }
 }
 
-impl Drop for LcpuActiveGuard {
+impl Drop for WakeGuard {
     /// Update the wake reference count on drop and clear LP_ACTIVE when last guard is released.
     fn drop(&mut self) {
         // Atomically decrement reference count and check if this is the last guard.
@@ -323,46 +354,75 @@ impl Drop for LcpuActiveGuard {
 // Power-on flow
 //=============================================================================
 
-/// High-level async LCPU power-on helper.
-///
-/// ```no_run
-/// use sifli_hal::lcpu::{self, LcpuConfig};
-///
-/// # async fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
-/// let cfg = LcpuConfig::new();
-/// lcpu::power_on(&cfg).await?;
-/// # Ok(()) }
-/// ```
-pub async fn power_on(config: &LcpuConfig) -> Result<(), LcpuError> {
-    info!("Starting LCPU power-on sequence");
+impl Lcpu<crate::mode::Async> {
+    /// High-level async LCPU power-on helper.
+    pub async fn power_on(&self, config: &LcpuConfig) -> Result<(), LcpuError> {
+        info!("Starting LCPU power-on sequence");
 
-    // 1. Wake LCPU (bf0_lcpu_init.c:165) via LcpuActiveGuard RAII.
-    debug!("Step 1: Waking up LCPU");
-    let guard = LcpuActiveGuard::new().await?;
+        // 1. Wake LCPU via WakeGuard RAII.
+        debug!("Step 1: Waking up LCPU");
+        let guard = WakeGuard::new().await?;
 
-    // 2. Reset and halt LCPU (bf0_lcpu_init.c:166).
-    debug!("Step 2: Resetting and halting LCPU");
-    reset_and_halt_lcpu().await?;
+        // 2. Reset and halt LCPU.
+        debug!("Step 2: Resetting and halting LCPU");
+        reset_and_halt_lcpu().await?;
 
-    power_on_after_reset(config, guard)
+        power_on_after_reset(config, guard)
+    }
+
+    /// Obtain an async LCPU wake guard.
+    ///
+    /// The returned [`WakeGuard`] automatically decrements the wake reference
+    /// count on drop and clears LP_ACTIVE when the last guard is released.
+    pub async fn wake(&self) -> Result<WakeGuard, LcpuError> {
+        WakeGuard::new().await
+    }
+
+    /// Async power-off helper: reset and halt LCPU.
+    pub async fn power_off(&self) -> Result<(), LcpuError> {
+        info!("Powering off LCPU");
+
+        reset_and_halt_lcpu().await?;
+
+        info!("LCPU powered off successfully");
+
+        Ok(())
+    }
 }
 
-/// Blocking version of [`power_on`].
-pub fn power_on_blocking(config: &LcpuConfig) -> Result<(), LcpuError> {
-    info!("Starting LCPU power-on sequence");
+impl Lcpu<crate::mode::Blocking> {
+    pub fn power_on(&self, config: &LcpuConfig) -> Result<(), LcpuError> {
+        info!("Starting LCPU power-on sequence");
 
-    // 1. Wake LCPU (bf0_lcpu_init.c:165) via LcpuActiveGuard RAII.
-    debug!("Step 1: Waking up LCPU");
-    let guard = LcpuActiveGuard::new_blocking()?;
+        // 1. Wake LCPU via WakeGuard RAII.
+        debug!("Step 1: Waking up LCPU");
+        let guard = WakeGuard::new_blocking()?;
 
-    // 2. Reset and halt LCPU (bf0_lcpu_init.c:166).
-    debug!("Step 2: Resetting and halting LCPU");
-    reset_and_halt_lcpu_blocking()?;
+        // 2. Reset and halt LCPU.
+        debug!("Step 2: Resetting and halting LCPU");
+        reset_and_halt_lcpu_blocking()?;
 
-    power_on_after_reset(config, guard)
+        power_on_after_reset(config, guard)
+    }
+
+    /// Obtain a blocking LCPU wake guard.
+    pub fn wake(&self) -> Result<WakeGuard, LcpuError> {
+        WakeGuard::new_blocking()
+    }
+
+    /// Blocking power-off helper: reset and halt LCPU.
+    pub fn power_off(&self) -> Result<(), LcpuError> {
+        info!("Powering off LCPU");
+
+        reset_and_halt_lcpu_blocking()?;
+
+        info!("LCPU powered off successfully");
+
+        Ok(())
+    }
 }
 
-fn power_on_after_reset(config: &LcpuConfig, _guard: LcpuActiveGuard) -> Result<(), LcpuError> {
+fn power_on_after_reset(config: &LcpuConfig, _guard: WakeGuard) -> Result<(), LcpuError> {
     // 3. Configure ROM parameters (bf0_lcpu_init.c:168).
     debug!("Step 3: Configuring ROM parameters");
     lcpu_rom_config()?;
@@ -409,36 +469,6 @@ fn power_on_after_reset(config: &LcpuConfig, _guard: LcpuActiveGuard) -> Result<
     debug!("Step 9: Guard will auto-cancel LP_ACTIVE request on drop");
 
     info!("LCPU power-on sequence completed successfully");
-
-    Ok(())
-}
-
-/// Async power-off: reset and halt LCPU.
-///
-/// ```no_run
-/// use sifli_hal::lcpu;
-///
-/// # async fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
-/// lcpu::power_off().await?;
-/// # Ok(()) }
-/// ```
-pub async fn power_off() -> Result<(), LcpuError> {
-    info!("Powering off LCPU");
-
-    reset_and_halt_lcpu().await?;
-
-    info!("LCPU powered off successfully");
-
-    Ok(())
-}
-
-/// Blocking version of [`power_off`].
-pub fn power_off_blocking() -> Result<(), LcpuError> {
-    info!("Powering off LCPU");
-
-    reset_and_halt_lcpu_blocking()?;
-
-    info!("LCPU powered off successfully");
 
     Ok(())
 }
@@ -618,10 +648,7 @@ fn lcpu_rom_config() -> Result<(), LcpuError> {
         let wdt_clk: u16 = 32_768;
 
         // HAL_LCPU_CONFIG_XTAL_ENABLED
-        ptr::write_volatile(
-            (base + OFFSET_IS_XTAL_ENABLE) as *mut u8,
-            is_enable_lxt,
-        );
+        ptr::write_volatile((base + OFFSET_IS_XTAL_ENABLE) as *mut u8, is_enable_lxt);
 
         // HAL_LCPU_CONFIG_WDT_STATUS
         ptr::write_volatile((base + OFFSET_WDT_STATUS) as *mut u32, wdt_status);
