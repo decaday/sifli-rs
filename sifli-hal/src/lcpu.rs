@@ -6,7 +6,7 @@
 //! use sifli_hal::lcpu::{Lcpu, LcpuConfig};
 //!
 //! # async fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
-//! let cfg = LcpuConfig::new();
+//! let cfg = LcpuConfig::default();
 //! let lcpu = Lcpu::new().into_async();
 //! lcpu.power_on(&cfg).await?;
 //! # Ok(()) }
@@ -22,6 +22,11 @@ use crate::lpaon;
 use crate::patch;
 use crate::syscfg::{self, Idr};
 
+#[cfg(feature = "sf32lb52x-lcpu")]
+mod sf32lb52x_lcpu_data {
+    include!(concat!(env!("OUT_DIR"), "/sf32lb52x_lcpu.rs"));
+}
+
 //=============================================================================
 // Configuration
 //=============================================================================
@@ -29,11 +34,11 @@ use crate::syscfg::{self, Idr};
 /// LCPU power-on configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct LcpuConfig {
-    /// LCPU firmware image (u32 words).
+    /// LCPU firmware image bytes.
     ///
     /// - A3 and earlier: must be provided and copied to LPSYS RAM.
     /// - Letter Series: optional, firmware is in ROM.
-    pub firmware: Option<&'static [u32]>,
+    pub firmware: Option<&'static [u8]>,
 
     /// Patch data for A3 and earlier (record + code format).
     pub patch_a3: Option<PatchData>,
@@ -59,41 +64,28 @@ impl LcpuConfig {
             disable_rf_cal: false,
         }
     }
-
-    /// Set firmware image for A3 and earlier revisions.
-    pub const fn with_firmware(mut self, firmware: &'static [u32]) -> Self {
-        self.firmware = Some(firmware);
-        self
-    }
-
-    /// Set patch data for A3 and earlier revisions.
-    pub const fn with_patch_a3(mut self, patch: PatchData) -> Self {
-        self.patch_a3 = Some(patch);
-        self
-    }
-
-    /// Set patch data for Letter Series (A4/B4).
-    pub const fn with_patch_letter(mut self, patch: PatchData) -> Self {
-        self.patch_letter = Some(patch);
-        self
-    }
-
-    /// Skip the frequency check during image loading.
-    pub const fn skip_frequency_check(mut self) -> Self {
-        self.skip_frequency_check = true;
-        self
-    }
-
-    /// Disable RF calibration step.
-    pub const fn disable_rf_cal(mut self) -> Self {
-        self.disable_rf_cal = true;
-        self
-    }
 }
 
 impl Default for LcpuConfig {
     fn default() -> Self {
-        Self::new()
+        #[allow(unused_mut)]
+        let mut cfg = Self::new();
+
+        #[cfg(feature = "sf32lb52x-lcpu")]
+        {
+            cfg.firmware = Some(sf32lb52x_lcpu_data::SF32LB52X_LCPU_FIRMWARE);
+            cfg.patch_a3 = Some(PatchData {
+                list: sf32lb52x_lcpu_data::SF32LB52X_LCPU_PATCH_A3_LIST,
+                bin: sf32lb52x_lcpu_data::SF32LB52X_LCPU_PATCH_A3_BIN,
+            });
+            cfg.patch_letter = Some(PatchData {
+                list: sf32lb52x_lcpu_data::SF32LB52X_LCPU_PATCH_LETTER_LIST,
+                bin: sf32lb52x_lcpu_data::SF32LB52X_LCPU_PATCH_LETTER_BIN,
+            });
+            cfg.disable_rf_cal = true;
+        }
+
+        cfg
     }
 }
 
@@ -101,9 +93,9 @@ impl Default for LcpuConfig {
 #[derive(Debug, Clone, Copy)]
 pub struct PatchData {
     /// Patch entry list array.
-    pub list: &'static [u32],
-    /// Patch code array.
-    pub bin: &'static [u32],
+    pub list: &'static [u8],
+    /// Patch code bytes.
+    pub bin: &'static [u8],
 }
 
 //=============================================================================
@@ -779,7 +771,7 @@ fn install_patch_and_calibrate(config: &LcpuConfig, idr: &Idr) -> Result<(), Lcp
     // Install patch if data is provided.
     if let Some(data) = patch_data {
         debug!(
-            "Installing patches (list: {} words, bin: {} words)",
+            "Installing patches (list: {} bytes, bin: {} bytes)",
             data.list.len(),
             data.bin.len()
         );

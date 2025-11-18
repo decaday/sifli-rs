@@ -59,11 +59,11 @@ pub enum Error {
 /// use sifli_hal::{lcpu_img, syscfg};
 ///
 /// let idr = syscfg::read_idr();
-/// lcpu_img::install(&idr, &[0u32])?;
+/// lcpu_img::install(&idr, &[0u8])?;
 /// ```
 #[inline]
-pub fn install(idr: &Idr, image_words: &[u32]) -> Result<(), Error> {
-    if image_words.is_empty() {
+pub fn install(idr: &Idr, image: &[u8]) -> Result<(), Error> {
+    if image.is_empty() {
         return Err(Error::EmptyImage);
     }
 
@@ -79,7 +79,7 @@ pub fn install(idr: &Idr, image_words: &[u32]) -> Result<(), Error> {
 
     // 仅 A3 及更早的版本需要写入 LCPU 镜像
     if !revision.is_letter_series() {
-        let size_bytes = core::mem::size_of_val(image_words);
+        let size_bytes = image.len();
         if size_bytes > LpsysRam::SIZE {
             error!(
                 "LCPU image too large: {} bytes (max {} bytes)",
@@ -96,7 +96,7 @@ pub fn install(idr: &Idr, image_words: &[u32]) -> Result<(), Error> {
         debug!("Installing LCPU image: {} bytes", size_bytes);
 
         unsafe {
-            install_image_unsafe(image_words);
+            install_image_unsafe(image);
         }
 
         debug!("LCPU image installed successfully");
@@ -113,10 +113,10 @@ pub fn install(idr: &Idr, image_words: &[u32]) -> Result<(), Error> {
 ///
 /// Caller must ensure size is valid and LCPU does not access the target region while copying.
 #[inline]
-unsafe fn install_image_unsafe(image_words: &[u32]) {
-    let dst = LpsysRam::CODE_START as *mut u32;
-    let len = image_words.len();
+unsafe fn install_image_unsafe(image: &[u8]) {
+    let dst = LpsysRam::CODE_START as *mut u8;
+    let len = image.len();
 
     // Efficiently copy LCPU image into LPSYS RAM.
-    ptr::copy_nonoverlapping(image_words.as_ptr(), dst, len);
+    ptr::copy_nonoverlapping(image.as_ptr(), dst, len);
 }

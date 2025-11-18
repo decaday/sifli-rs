@@ -1,15 +1,20 @@
-#![allow(dead_code)]
-
-#[rustfmt::skip]
-pub const G_LCPU_PATCH_LIST_U32: [u32; 14] = [
+#include <stdint.h>
+#include <string.h>
+#include "bf0_hal.h"
+#include "mem_map.h"
+#include "register.h"
+#include "bf0_hal_patch.h"
+#ifdef HAL_LCPU_PATCH_MODULE
+static const unsigned int g_lcpu_patch_list[] =
+{
     0x50544348, 0x00000030, 0x00057830, 0x63682032,
     0x000062C8, 0xBEAAF3FE, 0x0001ABBC, 0xBA33F3EA,
     0x00024D00, 0xB99AF3E0, 0x00047960, 0x210048DF,
     0x00021D84, 0xB969F3E3,
-];
+};
 
-#[rustfmt::skip]
-pub const G_LCPU_PATCH_BIN_U32: [u32; 155] = [
+static const unsigned int g_lcpu_patch_bin[] =
+{
     0xF000B580, 0x4802F8FF, 0x70012107, 0xBF00BD80,
     0x20400990, 0xB826F000, 0x46514770, 0xF83AF000,
     0xF64A4604, 0xF2C031C1, 0x47080101, 0x07F8D10A,
@@ -49,4 +54,26 @@ pub const G_LCPU_PATCH_BIN_U32: [u32; 155] = [
     0x204001B8, 0x0040520B, 0x204001A8, 0x004051BF,
     0x204001AC, 0x00405203, 0x204008A8, 0x00040008,
     0x00100040, 0x002C0050, 0x01CE02D0,
-];
+};
+void lcpu_patch_install_rev_b()
+{
+    uint32_t entry[3] = {0x48434150, 0x7, LCPU_PATCH_CODE_START_ADDR + 1};
+    memcpy((void *)LCPU_PATCH_BUF_START_ADDR, (void *)&entry, 12);
+#ifdef SOC_BF0_HCPU
+    memset((void *)(LCPU_PATCH_CODE_START_ADDR_S), 0, LCPU_PATCH_CODE_SIZE);
+    memcpy((void *)(LCPU_PATCH_CODE_START_ADDR_S), g_lcpu_patch_bin, sizeof(g_lcpu_patch_bin));
+#else
+    memset((void *)(LCPU_PATCH_CODE_START_ADDR), 0, LCPU_PATCH_CODE_SIZE);
+    memcpy((void *)(LCPU_PATCH_CODE_START_ADDR), g_lcpu_patch_bin, sizeof(g_lcpu_patch_bin));
+#endif
+    HAL_PATCH_install();
+}
+uint32_t *HAL_PATCH_GetEntryAddr(void)
+{
+    uint32_t *entry_addr = (uint32_t *)LCPU_PATCH_RECORD_ADDR;
+    uint8_t rev_id = __HAL_SYSCFG_GET_REVID();
+    if (rev_id >= HAL_CHIP_REV_ID_A4)
+        entry_addr = (uint32_t *)g_lcpu_patch_list;
+    return entry_addr;
+}
+#endif

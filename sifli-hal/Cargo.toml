@@ -92,6 +92,7 @@ usb = ["musb"]
 unstable-pac = []
 
 sf32lb52x = ["sifli-pac/sf32lb52x", "musb?/builtin-sf32lb52x"]
+sf32lb52x-lcpu = ["sf32lb52x"]
 
 time-driver-atim1 = ["_time-driver-atim"]
 time-driver-gptim1 = ["_time-driver-gptim"]
