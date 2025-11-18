@@ -77,7 +77,7 @@ pub fn install(idr: &Idr, image: &[u8]) -> Result<(), Error> {
         return Err(Error::InvalidRevision { revid });
     }
 
-    // 仅 A3 及更早的版本需要写入 LCPU 镜像
+    // Only A3 or Earlier is required to load LCPU image
     if !revision.is_letter_series() {
         let size_bytes = image.len();
         if size_bytes > LpsysRam::SIZE {

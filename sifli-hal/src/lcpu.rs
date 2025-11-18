@@ -6,8 +6,9 @@
 //! use sifli_hal::lcpu::{Lcpu, LcpuConfig};
 //!
 //! # async fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
+//! let p = sifli_hal::init(Default::default());
 //! let cfg = LcpuConfig::default();
-//! let lcpu = Lcpu::new().into_async();
+//! let lcpu = Lcpu::new(p.HPSYS_AON, p.LPSYS_AON).into_async();
 //! lcpu.power_on(&cfg).await?;
 //! # Ok(()) }
 //! ```
@@ -15,11 +16,13 @@
 // Re-export related items
 pub use crate::lcpu_img::{self, LCPU_CODE_START_ADDR, LPSYS_RAM_BASE, LPSYS_RAM_SIZE};
 
+use core::fmt;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU8, Ordering};
 
-use crate::lpaon;
-use crate::patch;
+use crate::peripherals;
+use crate::Peripheral;
+use crate::{hpaon, lpaon, patch};
 use crate::syscfg::{self, Idr};
 
 #[cfg(feature = "sf32lb52x-lcpu")]
@@ -173,27 +176,38 @@ pub enum CoreId {
 //=============================================================================
 
 /// LCPU driver type, parameterized by operation mode (Async / Blocking).
-#[derive(Debug, Clone, Copy)]
-pub struct Lcpu<M: crate::mode::Mode> {
+pub struct Lcpu<'d, M: crate::mode::Mode> {
+    hpaon: hpaon::Hpaon<'d, peripherals::HPSYS_AON>,
+    lpaon: lpaon::LpAon<'d, peripherals::LPSYS_AON>,
     _mode: PhantomData<fn() -> M>,
 }
 
-impl Lcpu<crate::mode::Blocking> {
-    /// Create a new blocking LCPU driver instance.
-    pub const fn new() -> Self {
-        Self { _mode: PhantomData }
-    }
-
-    /// Convert the blocking driver into an async driver.
-    pub const fn into_async(self) -> Lcpu<crate::mode::Async> {
-        Lcpu { _mode: PhantomData }
+impl<'d, M: crate::mode::Mode> fmt::Debug for Lcpu<'d, M> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Lcpu").finish_non_exhaustive()
     }
 }
 
-impl<M: crate::mode::Mode> Default for Lcpu<M> {
-    fn default() -> Self {
-        // Default instance mirrors `new()` semantics.
-        Lcpu { _mode: PhantomData }
+impl<'d> Lcpu<'d, crate::mode::Blocking> {
+    /// Create a new blocking LCPU driver instance.
+    pub fn new(
+        hpsys_aon: impl Peripheral<P = peripherals::HPSYS_AON> + 'd,
+        lpsys_aon: impl Peripheral<P = peripherals::LPSYS_AON> + 'd,
+    ) -> Self {
+        Self {
+            hpaon: hpaon::Hpaon::new(hpsys_aon),
+            lpaon: lpaon::LpAon::new(lpsys_aon),
+            _mode: PhantomData,
+        }
+    }
+
+    /// Convert the blocking driver into an async driver.
+    pub fn into_async(self) -> Lcpu<'d, crate::mode::Async> {
+        Lcpu {
+            hpaon: self.hpaon,
+            lpaon: self.lpaon,
+            _mode: PhantomData,
+        }
     }
 }
 
@@ -216,19 +230,23 @@ const MAX_REF_COUNT: u8 = 20;
 /// count on drop, clearing the wake request when the last guard is dropped.
 ///
 /// ```no_run
-/// use sifli_hal::lcpu::WakeGuard;
+/// use sifli_hal::lcpu::Lcpu;
 ///
 /// # async fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
-/// let _guard = WakeGuard::new().await?;
+/// let p = sifli_hal::init(Default::default());
+/// let lcpu = Lcpu::new(p.HPSYS_AON, p.LPSYS_AON).into_async();
+/// let _guard = lcpu.wake().await?;
 /// # Ok(()) }
 /// ```
-pub struct WakeGuard {
-    _private: (),
+pub struct WakeGuard<'a, 'd> {
+    hpaon: &'a hpaon::Hpaon<'d, peripherals::HPSYS_AON>,
 }
 
-impl WakeGuard {
+impl<'a, 'd> WakeGuard<'a, 'd> {
     /// Create an async LCPU wake guard; wakes LCPU on first use.
-    pub async fn new() -> Result<Self, LcpuError> {
+    pub async fn new(
+        hpaon: &'a hpaon::Hpaon<'d, peripherals::HPSYS_AON>,
+    ) -> Result<Self, LcpuError> {
         // 1. Atomically increment wake reference count.
         let prev_count = critical_section::with(|_| {
             let count = LCPU_WAKEUP_REF_CNT.load(Ordering::Relaxed);
@@ -252,7 +270,7 @@ impl WakeGuard {
             // Timeout: based on microsecond-scale wait in SDK
             // (`HAL_HPAON_WakeCore` with ~230us + LP_ACTIVE polls),
             // here we use a conservative 20ms upper bound to avoid hanging.
-            if !crate::hpaon::Hpaon::wake_lcpu_with_timeout(20_000).await {
+            if !hpaon.wake_lcpu_with_timeout(20_000).await {
                 error!("Timeout waiting for LP_ACTIVE, rolling back ref count");
 
                 // On timeout, roll back the reference count.
@@ -268,11 +286,13 @@ impl WakeGuard {
             debug!("LCPU already awake, reusing existing wake state");
         }
 
-        Ok(Self { _private: () })
+        Ok(Self { hpaon })
     }
 
     /// Blocking version of [`WakeGuard::new`].
-    pub fn new_blocking() -> Result<Self, LcpuError> {
+    pub fn new_blocking(
+        hpaon: &'a hpaon::Hpaon<'d, peripherals::HPSYS_AON>,
+    ) -> Result<Self, LcpuError> {
         // 1. Atomically increment wake reference count.
         let prev_count = critical_section::with(|_| {
             let count = LCPU_WAKEUP_REF_CNT.load(Ordering::Relaxed);
@@ -294,7 +314,7 @@ impl WakeGuard {
             debug!("First wake, setting HP2LP_REQ and waiting for LP_ACTIVE");
 
             // Timeout: see `new`; use the same conservative 20ms limit.
-            if !crate::hpaon::Hpaon::wake_lcpu_with_timeout_blocking(20_000) {
+            if !hpaon.wake_lcpu_with_timeout_blocking(20_000) {
                 error!("Timeout waiting for LP_ACTIVE, rolling back ref count");
 
                 // On timeout, roll back the reference count.
@@ -310,11 +330,11 @@ impl WakeGuard {
             debug!("LCPU already awake, reusing existing wake state");
         }
 
-        Ok(Self { _private: () })
+        Ok(Self { hpaon })
     }
 }
 
-impl Drop for WakeGuard {
+impl<'a, 'd> Drop for WakeGuard<'a, 'd> {
     /// Update the wake reference count on drop and clear LP_ACTIVE when last guard is released.
     fn drop(&mut self) {
         // Atomically decrement reference count and check if this is the last guard.
@@ -333,7 +353,7 @@ impl Drop for WakeGuard {
             debug!("Last guard dropped, clearing HP2LP_REQ");
 
             // Clear HP2LP_REQ (bf0_hal_aon.h:309).
-            crate::hpaon::Hpaon::cancel_lp_active_request();
+            self.hpaon.cancel_lp_active_request();
 
             debug!("HP2LP_REQ cleared, LPSYS can now sleep");
         } else {
@@ -346,213 +366,210 @@ impl Drop for WakeGuard {
 // Power-on flow
 //=============================================================================
 
-impl Lcpu<crate::mode::Async> {
+impl<'d> Lcpu<'d, crate::mode::Async> {
     /// High-level async LCPU power-on helper.
     pub async fn power_on(&self, config: &LcpuConfig) -> Result<(), LcpuError> {
         info!("Starting LCPU power-on sequence");
 
         // 1. Wake LCPU via WakeGuard RAII.
         debug!("Step 1: Waking up LCPU");
-        let guard = WakeGuard::new().await?;
+        let guard = WakeGuard::new(&self.hpaon).await?;
 
         // 2. Reset and halt LCPU.
         debug!("Step 2: Resetting and halting LCPU");
-        reset_and_halt_lcpu().await?;
+        self.reset_and_halt_lcpu().await?;
 
-        power_on_after_reset(config, guard)
+        self.power_on_after_reset(config, guard)
     }
 
     /// Obtain an async LCPU wake guard.
     ///
     /// The returned [`WakeGuard`] automatically decrements the wake reference
     /// count on drop and clears LP_ACTIVE when the last guard is released.
-    pub async fn wake(&self) -> Result<WakeGuard, LcpuError> {
-        WakeGuard::new().await
+    pub async fn wake(&self) -> Result<WakeGuard<'_, 'd>, LcpuError> {
+        WakeGuard::new(&self.hpaon).await
     }
 
     /// Async power-off helper: reset and halt LCPU.
     pub async fn power_off(&self) -> Result<(), LcpuError> {
         info!("Powering off LCPU");
 
-        reset_and_halt_lcpu().await?;
+        self.reset_and_halt_lcpu().await?;
 
         info!("LCPU powered off successfully");
 
         Ok(())
     }
+
+    async fn reset_and_halt_lcpu(&self) -> Result<(), LcpuError> {
+        use crate::lpsys_rcc;
+        use embassy_time::{with_timeout, Duration, Timer};
+
+        // Only perform reset flow when CPUWAIT is not set.
+        if !self.lpaon.cpuwait() {
+            // 1. Set CPUWAIT so LCPU stays halted.
+            self.lpaon.set_cpuwait(true);
+
+            // 2. Reset LCPU and MAC (SF32LB52X requires both).
+            lpsys_rcc::set_lcpu_reset(true);
+            lpsys_rcc::set_mac_reset(true);
+
+            // Embassy style: poll with timeout.
+            let wait_reset = async {
+                while crate::pac::LPSYS_RCC.rstr1().read().0 == 0 {
+                    Timer::after_micros(10).await;
+                }
+            };
+            with_timeout(Duration::from_millis(20), wait_reset)
+                .await
+                .map_err(|_| LcpuError::RccError)?;
+
+            // 3. If LPSYS is sleeping, wake it up (async loop + timeout).
+            if self.lpaon.sleep_status() {
+                self.lpaon.set_wkup_req(true);
+
+                let wait_wakeup = async {
+                    while self.lpaon.sleep_status() {
+                        Timer::after_micros(10).await;
+                    }
+                };
+                with_timeout(Duration::from_micros(20), wait_wakeup)
+                    .await
+                    .map_err(|_| LcpuError::RccError)?;
+            }
+
+            // 4. Clear reset bits, keep CPUWAIT = 1.
+            lpsys_rcc::set_lcpu_reset(false);
+            lpsys_rcc::set_mac_reset(false);
+        }
+
+        Ok(())
+    }
 }
 
-impl Lcpu<crate::mode::Blocking> {
+impl<'d> Lcpu<'d, crate::mode::Blocking> {
     pub fn power_on(&self, config: &LcpuConfig) -> Result<(), LcpuError> {
         info!("Starting LCPU power-on sequence");
 
         // 1. Wake LCPU via WakeGuard RAII.
         debug!("Step 1: Waking up LCPU");
-        let guard = WakeGuard::new_blocking()?;
+        let guard = WakeGuard::new_blocking(&self.hpaon)?;
 
         // 2. Reset and halt LCPU.
         debug!("Step 2: Resetting and halting LCPU");
-        reset_and_halt_lcpu_blocking()?;
+        self.reset_and_halt_lcpu()?;
 
-        power_on_after_reset(config, guard)
+        self.power_on_after_reset(config, guard)
     }
 
     /// Obtain a blocking LCPU wake guard.
-    pub fn wake(&self) -> Result<WakeGuard, LcpuError> {
-        WakeGuard::new_blocking()
+    pub fn wake(&self) -> Result<WakeGuard<'_, 'd>, LcpuError> {
+        WakeGuard::new_blocking(&self.hpaon)
     }
 
     /// Blocking power-off helper: reset and halt LCPU.
     pub fn power_off(&self) -> Result<(), LcpuError> {
         info!("Powering off LCPU");
 
-        reset_and_halt_lcpu_blocking()?;
+        self.reset_and_halt_lcpu()?;
 
         info!("LCPU powered off successfully");
 
         Ok(())
     }
-}
 
-fn power_on_after_reset(config: &LcpuConfig, _guard: WakeGuard) -> Result<(), LcpuError> {
-    // 3. Configure ROM parameters (bf0_lcpu_init.c:168).
-    debug!("Step 3: Configuring ROM parameters");
-    lcpu_rom_config()?;
+    fn reset_and_halt_lcpu(&self) -> Result<(), LcpuError> {
+        use crate::lpsys_rcc;
 
-    // 4. Enforce frequency limit while loading (bf0_lcpu_init.c:170-176).
-    if !config.skip_frequency_check {
-        debug!("Step 4: Checking LCPU frequency (must be ≤ 24MHz during loading)");
-        check_lcpu_frequency()?;
-    } else {
-        warn!("Step 4: Skipping frequency check (as requested by config)");
-    }
+        // Only perform reset flow when CPUWAIT is not set.
+        if !self.lpaon.cpuwait() {
+            // 1. Set CPUWAIT so LCPU stays halted.
+            self.lpaon.set_cpuwait(true);
 
-    // 5. Install image for A3 and earlier (bf0_lcpu_init.c:178-182).
-    let idr = syscfg::read_idr();
-    if !idr.revision().is_letter_series() {
-        debug!("Step 5: Installing LCPU firmware image (A3/earlier)");
+            // 2. Reset LCPU and MAC (SF32LB52X requires both).
+            lpsys_rcc::set_lcpu_reset(true);
+            lpsys_rcc::set_mac_reset(true);
 
-        if let Some(firmware) = config.firmware {
-            lcpu_img::install(&idr, firmware)?;
-        } else {
-            error!("Firmware required for A3 and earlier revisions");
-            return Err(LcpuError::FirmwareMissing);
-        }
-    } else {
-        debug!("Step 5: Skipping image install (Letter Series, firmware in ROM)");
-    }
+            // Wait until reset bits take effect.
+            while crate::pac::LPSYS_RCC.rstr1().read().0 == 0 {}
 
-    // 6. Configure LCPU start address (bf0_lcpu_init.c:184).
-    debug!(
-        "Step 6: Configuring LCPU start address (0x{:08X})",
-        LCPU_CODE_START_ADDR
-    );
-    lpaon::LpAon::configure_lcpu_start();
-
-    // 7. Install patches and perform RF calibration (bf0_lcpu_init.c:185).
-    debug!("Step 7: Installing patches and RF calibration");
-    install_patch_and_calibrate(config, &idr)?;
-
-    // 8. Release LCPU to run (bf0_lcpu_init.c:186).
-    debug!("Step 8: Releasing LCPU to run");
-    release_lcpu()?;
-
-    // 9. Finalize (bf0_lcpu_init.c:187); guard drops and clears LP_ACTIVE.
-    debug!("Step 9: Guard will auto-cancel LP_ACTIVE request on drop");
-
-    info!("LCPU power-on sequence completed successfully");
-
-    Ok(())
-}
-
-//=============================================================================
-// Internal helpers
-//=============================================================================
-
-/// Internal async helper: reset and halt LCPU.
-async fn reset_and_halt_lcpu() -> Result<(), LcpuError> {
-    use crate::{lpaon::LpAon, lpsys_rcc};
-    use embassy_time::{with_timeout, Duration, Timer};
-
-    // Only perform reset flow when CPUWAIT is not set.
-    if !LpAon::cpuwait() {
-        // 1. Set CPUWAIT so LCPU stays halted.
-        LpAon::set_cpuwait(true);
-
-        // 2. Reset LCPU and MAC (SF32LB52X requires both).
-        lpsys_rcc::set_lcpu_reset(true);
-        lpsys_rcc::set_mac_reset(true);
-
-        // Embassy style: poll with timeout.
-        let wait_reset = async {
-            while crate::pac::LPSYS_RCC.rstr1().read().0 == 0 {
-                Timer::after_micros(10).await;
+            // 3. If LPSYS is sleeping, wake it up.
+            if self.lpaon.sleep_status() {
+                self.lpaon.set_wkup_req(true);
+                while self.lpaon.sleep_status() {}
             }
-        };
-        with_timeout(Duration::from_millis(20), wait_reset)
-            .await
-            .map_err(|_| LcpuError::RccError)?;
 
-        // 3. If LPSYS is sleeping, wake it up (async loop + timeout).
-        if LpAon::sleep_status() {
-            LpAon::set_wkup_req(true);
-
-            let wait_wakeup = async {
-                while LpAon::sleep_status() {
-                    Timer::after_micros(10).await;
-                }
-            };
-            with_timeout(Duration::from_micros(20), wait_wakeup)
-                .await
-                .map_err(|_| LcpuError::RccError)?;
+            // 4. Clear reset bits, keep CPUWAIT = 1.
+            lpsys_rcc::set_lcpu_reset(false);
+            lpsys_rcc::set_mac_reset(false);
         }
 
-        // 4. Clear reset bits, keep CPUWAIT = 1.
-        lpsys_rcc::set_lcpu_reset(false);
-        lpsys_rcc::set_mac_reset(false);
+        Ok(())
     }
-
-    Ok(())
 }
 
-/// Internal blocking helper: reset and halt LCPU.
-fn reset_and_halt_lcpu_blocking() -> Result<(), LcpuError> {
-    use crate::{lpaon::LpAon, lpsys_rcc};
+impl<'d, M: crate::mode::Mode> Lcpu<'d, M> {
+    fn power_on_after_reset<'a>(
+        &'a self,
+        config: &LcpuConfig,
+        _guard: WakeGuard<'a, 'd>,
+    ) -> Result<(), LcpuError> {
+        // 3. Configure ROM parameters (bf0_lcpu_init.c:168).
+        debug!("Step 3: Configuring ROM parameters");
+        lcpu_rom_config()?;
 
-    // Only perform reset flow when CPUWAIT is not set.
-    if !LpAon::cpuwait() {
-        // 1. Set CPUWAIT so LCPU stays halted.
-        LpAon::set_cpuwait(true);
-
-        // 2. Reset LCPU and MAC (SF32LB52X requires both).
-        lpsys_rcc::set_lcpu_reset(true);
-        lpsys_rcc::set_mac_reset(true);
-
-        // Wait until reset bits take effect.
-        while crate::pac::LPSYS_RCC.rstr1().read().0 == 0 {}
-
-        // 3. If LPSYS is sleeping, wake it up.
-        if LpAon::sleep_status() {
-            LpAon::set_wkup_req(true);
-            while LpAon::sleep_status() {}
+        // 4. Enforce frequency limit while loading (bf0_lcpu_init.c:170-176).
+        if !config.skip_frequency_check {
+            debug!("Step 4: Checking LCPU frequency (must be ≤ 24MHz during loading)");
+            check_lcpu_frequency()?;
+        } else {
+            warn!("Step 4: Skipping frequency check (as requested by config)");
         }
 
-        // 4. Clear reset bits, keep CPUWAIT = 1.
-        lpsys_rcc::set_lcpu_reset(false);
-        lpsys_rcc::set_mac_reset(false);
+        // 5. Install image for A3 and earlier (bf0_lcpu_init.c:178-182).
+        let idr = syscfg::read_idr();
+        if !idr.revision().is_letter_series() {
+            debug!("Step 5: Installing LCPU firmware image (A3/earlier)");
+
+            if let Some(firmware) = config.firmware {
+                lcpu_img::install(&idr, firmware)?;
+            } else {
+                error!("Firmware required for A3 and earlier revisions");
+                return Err(LcpuError::FirmwareMissing);
+            }
+        } else {
+            debug!("Step 5: Skipping image install (Letter Series, firmware in ROM)");
+        }
+
+        // 6. Configure LCPU start address (bf0_lcpu_init.c:184).
+        debug!(
+            "Step 6: Configuring LCPU start address (0x{:08X})",
+            LCPU_CODE_START_ADDR
+        );
+        self.lpaon.configure_lcpu_start();
+
+        // 7. Install patches and perform RF calibration (bf0_lcpu_init.c:185).
+        debug!("Step 7: Installing patches and RF calibration");
+        install_patch_and_calibrate(config, &idr)?;
+
+        // 8. Release LCPU to run (bf0_lcpu_init.c:186).
+        debug!("Step 8: Releasing LCPU to run");
+        self.release_lcpu()?;
+
+        // 9. Finalize (bf0_lcpu_init.c:187); guard drops and clears LP_ACTIVE.
+        debug!("Step 9: Guard will auto-cancel LP_ACTIVE request on drop");
+
+        info!("LCPU power-on sequence completed successfully");
+
+        Ok(())
     }
 
-    Ok(())
-}
+    fn release_lcpu(&self) -> Result<(), LcpuError> {
+        // Clear CPUWAIT so LCPU can run.
+        self.lpaon.set_cpuwait(false);
 
-/// Internal helper: clear CPUWAIT to release LCPU.
-fn release_lcpu() -> Result<(), LcpuError> {
-    use crate::lpaon::LpAon;
-
-    // Clear CPUWAIT so LCPU can run.
-    LpAon::set_cpuwait(false);
-
-    Ok(())
+        Ok(())
+    }
 }
 
 /// Configure LCPU ROM parameters (internal, SDK-aligned layout).

@@ -18,7 +18,7 @@ async fn main(_spawner: Spawner) {
 
     info!("Starting LCPU power-on example");
 
-    let lcpu = Lcpu::new().into_async();
+    let lcpu = Lcpu::new(p.HPSYS_AON, p.LPSYS_AON).into_async();
 
     let cfg = LcpuConfig::default();
 

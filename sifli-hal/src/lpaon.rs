@@ -1,23 +1,45 @@
 //! LPAON (Low-Power Always-On) module.
 //!
 //! Provides helpers to configure LCPU start address and related wake control.
-//!
-//! ```no_run
-//! use sifli_hal::lpaon::LpAon;
-//!
-//! LpAon::configure_lcpu_start();
-//! let (sp, pc) = LpAon::read_start_vector();
-//! ```
 
-use crate::{lcpu, pac};
+use crate::pac::lpsys_aon::LpsysAon as Regs;
+use crate::{lcpu, Peripheral};
+use core::marker::PhantomData;
+
+#[allow(private_interfaces)]
+pub(crate) trait SealedInstance {
+    fn regs() -> Regs;
+}
+
+/// LPAON peripheral instance trait.
+#[allow(private_bounds)]
+pub trait Instance: Peripheral<P = Self> + SealedInstance + 'static + Send {}
+
+#[allow(private_interfaces)]
+impl SealedInstance for crate::peripherals::LPSYS_AON {
+    fn regs() -> Regs {
+        crate::pac::LPSYS_AON
+    }
+}
+
+impl Instance for crate::peripherals::LPSYS_AON {}
 
 /// LPAON driver.
 ///
-/// Zero-sized type used as a namespace around `LPSYS_AON` operations.
+/// Receives the LPSYS_AON peripheral as a parameter.
 /// Always-on peripheral, no clock gating or init required.
-pub struct LpAon;
+pub struct LpAon<'d, T: Instance> {
+    _phantom: PhantomData<&'d mut T>,
+}
 
-impl LpAon {
+impl<'d, T: Instance> LpAon<'d, T> {
+    /// Create a new LPAON driver instance.
+    pub fn new(_peri: impl Peripheral<P = T> + 'd) -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+
     /// Read the first two entries `(SP, PC)` from the LCPU vector table in memory.
     ///
     /// # Safety
@@ -39,19 +61,14 @@ impl LpAon {
 
     /// Write the given `(sp, pc)` into LPSYS_AON SPR/PCR registers.
     fn write_start_vector_to_regs(sp: u32, pc: u32) {
+        let r = T::regs();
         // On LCPU start/wake, hardware loads SP and PC from these registers.
-        pac::LPSYS_AON.spr().write(|w| w.set_sp(sp));
-        pac::LPSYS_AON.pcr().write(|w| w.set_pc(pc));
+        r.spr().write(|w| w.set_sp(sp));
+        r.pcr().write(|w| w.set_pc(pc));
     }
 
     /// Configure LCPU start address: read `(SP, PC)` from the LCPU vector table and write into LPAON registers.
-    ///
-    /// ```no_run
-    /// use sifli_hal::lpaon::LpAon;
-    ///
-    /// LpAon::configure_lcpu_start();
-    /// ```
-    pub fn configure_lcpu_start() {
+    pub fn configure_lcpu_start(&self) {
         let (sp, pc) = Self::read_start_vector_from_mem();
         Self::write_start_vector_to_regs(sp, pc);
     }
@@ -60,38 +77,36 @@ impl LpAon {
     ///
     /// ```no_run
     /// use sifli_hal::lpaon::LpAon;
+    /// use sifli_hal::peripherals;
     ///
-    /// let (sp, pc) = LpAon::read_start_vector();
+    /// let p = sifli_hal::init(Default::default());
+    /// let lpaon = LpAon::new(p.LPSYS_AON);
+    /// let (sp, pc) = lpaon.read_start_vector();
     /// ```
-    pub fn read_start_vector() -> (u32, u32) {
-        let spr = pac::LPSYS_AON.spr().read();
-        let pcr = pac::LPSYS_AON.pcr().read();
+    pub fn read_start_vector(&self) -> (u32, u32) {
+        let r = T::regs();
+        let spr = r.spr().read();
+        let pcr = r.pcr().read();
         (spr.sp(), pcr.pc())
     }
 
     /// Read the CPUWAIT flag from `LPSYS_AON.PMR`.
-    #[allow(dead_code)]
-    pub(crate) fn cpuwait() -> bool {
-        pac::LPSYS_AON.pmr().read().cpuwait()
+    pub fn cpuwait(&self) -> bool {
+        T::regs().pmr().read().cpuwait()
     }
 
     /// Set/clear the CPUWAIT flag in `LPSYS_AON.PMR`.
-    #[allow(dead_code)]
-    pub(crate) fn set_cpuwait(enable: bool) {
-        pac::LPSYS_AON.pmr().modify(|w| w.set_cpuwait(enable));
+    pub fn set_cpuwait(&self, enable: bool) {
+        T::regs().pmr().modify(|w| w.set_cpuwait(enable));
     }
 
     /// Read the SLEEP_STATUS flag from `LPSYS_AON.SLP_CTRL`.
-    #[allow(dead_code)]
-    pub(crate) fn sleep_status() -> bool {
-        pac::LPSYS_AON.slp_ctrl().read().sleep_status()
+    pub fn sleep_status(&self) -> bool {
+        T::regs().slp_ctrl().read().sleep_status()
     }
 
     /// Set/clear the WKUP_REQ flag in `LPSYS_AON.SLP_CTRL` to request a wakeup.
-    #[allow(dead_code)]
-    pub(crate) fn set_wkup_req(enable: bool) {
-        pac::LPSYS_AON
-            .slp_ctrl()
-            .modify(|w| w.set_wkup_req(enable));
+    pub fn set_wkup_req(&self, enable: bool) {
+        T::regs().slp_ctrl().modify(|w| w.set_wkup_req(enable));
     }
 }
