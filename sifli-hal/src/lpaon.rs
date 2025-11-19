@@ -45,10 +45,10 @@ impl<'d, T: Instance> LpAon<'d, T> {
     /// # Safety
     ///
     /// Caller must ensure:
-    /// - LCPU image has been loaded to `lcpu::LCPU_CODE_START_ADDR`.
+    /// - LCPU image has been loaded to `lcpu::LpsysRam::CODE_START`.
     /// - The first two entries form a valid stack pointer and reset handler.
     fn read_start_vector_from_mem() -> (u32, u32) {
-        let vector_addr = lcpu::LCPU_CODE_START_ADDR as *const u32;
+        let vector_addr = lcpu::LpsysRam::CODE_START as *const u32;
 
         unsafe {
             // vector[0] (0x20400000): initial stack pointer (SP)

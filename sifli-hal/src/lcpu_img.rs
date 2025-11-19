@@ -24,22 +24,6 @@ impl LpsysRam {
     pub const CODE_START: usize = Self::BASE;
 }
 
-/// LPSYS RAM base address (HCPU view).
-///
-/// Prefer using [`LpsysRam::BASE`] in new code.
-pub const LPSYS_RAM_BASE: usize = LpsysRam::BASE;
-
-/// LCPU code start address for SF32LB52x.
-///
-/// Prefer using [`LpsysRam::CODE_START`] in new code.
-pub const LCPU_CODE_START_ADDR: usize = LpsysRam::CODE_START;
-
-/// LPSYS RAM size for A3 and earlier revisions (24KB).
-/// Reference: `LPSYS_RAM_SIZE` in `mem_map.h`.
-///
-/// Prefer using [`LpsysRam::SIZE`] in new code.
-pub const LPSYS_RAM_SIZE: usize = LpsysRam::SIZE;
-
 /// LCPU image installation errors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]

@@ -14,16 +14,16 @@
 //! ```
 
 // Re-export related items
-pub use crate::lcpu_img::{self, LCPU_CODE_START_ADDR, LPSYS_RAM_BASE, LPSYS_RAM_SIZE};
+pub use crate::lcpu_img::{self, LpsysRam};
 
 use core::fmt;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use crate::peripherals;
+use crate::syscfg::{self, Idr};
 use crate::Peripheral;
 use crate::{hpaon, lpaon, patch};
-use crate::syscfg::{self, Idr};
 
 #[cfg(feature = "sf32lb52x-lcpu")]
 mod sf32lb52x_lcpu_data {
@@ -416,7 +416,7 @@ impl<'d> Lcpu<'d, crate::mode::Async> {
 
             // Embassy style: poll with timeout.
             let wait_reset = async {
-                while crate::pac::LPSYS_RCC.rstr1().read().0 == 0 {
+                while lpsys_rcc::get_rstr1() == 0 {
                     Timer::after_micros(10).await;
                 }
             };
@@ -491,7 +491,7 @@ impl<'d> Lcpu<'d, crate::mode::Blocking> {
             lpsys_rcc::set_mac_reset(true);
 
             // Wait until reset bits take effect.
-            while crate::pac::LPSYS_RCC.rstr1().read().0 == 0 {}
+            while lpsys_rcc::get_rstr1() == 0 {}
 
             // 3. If LPSYS is sleeping, wake it up.
             if self.lpaon.sleep_status() {
@@ -544,7 +544,7 @@ impl<'d, M: crate::mode::Mode> Lcpu<'d, M> {
         // 6. Configure LCPU start address (bf0_lcpu_init.c:184).
         debug!(
             "Step 6: Configuring LCPU start address (0x{:08X})",
-            LCPU_CODE_START_ADDR
+            LpsysRam::CODE_START
         );
         self.lpaon.configure_lcpu_start();
 
