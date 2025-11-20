@@ -3,8 +3,8 @@
 //! This module unifies LCPU memory operations, including configuring ROM parameters
 //! and loading firmware images into LPSYS RAM.
 
-use core::{mem, ptr};
 use crate::syscfg::Idr;
+use core::{mem, ptr};
 
 //=============================================================================
 // ROM Configuration Layout
@@ -17,34 +17,34 @@ use crate::syscfg::Idr;
 #[repr(C)]
 pub struct RomControlBlock {
     /// Magic number (0x45457878).
-    pub magic: u32,            // 0x00
-    pub _pad0: [u8; 8],        // 0x04..0x0C
-    
+    pub magic: u32, // 0x00
+    pub _pad0: [u8; 8], // 0x04..0x0C
+
     /// Watchdog timeout configuration.
-    pub wdt_time: u32,         // 0x0C (12)
-    pub wdt_status: u32,       // 0x10 (16)
-    pub _pad1: [u8; 4],        // 0x14..0x18
-    pub wdt_clk: u16,          // 0x18 (24)
-    
+    pub wdt_time: u32, // 0x0C (12)
+    pub wdt_status: u32, // 0x10 (16)
+    pub _pad1: [u8; 4],  // 0x14..0x18
+    pub wdt_clk: u16,    // 0x18 (24)
+
     /// Clock configuration.
-    pub is_xtal_enable: u8,    // 0x1A (26)
-    pub is_rccal_in_l: u8,     // 0x1B (27)
-    
+    pub is_xtal_enable: u8, // 0x1A (26)
+    pub is_rccal_in_l: u8, // 0x1B (27)
+
     // Padding to reach 0xAC (172).
     // 28 (0x1C) to 172 (0xAC) = 144 bytes.
-    pub _pad2: [u8; 144],      // 0x1C..0xAC (28..172)
+    pub _pad2: [u8; 144], // 0x1C..0xAC (28..172)
 
     /// Letter Series (A4/B4) extended configuration (BT/BLE).
-    pub bt_config: BtRomConfig,// 0xAC (172)
-    
+    pub bt_config: BtRomConfig, // 0xAC (172)
+
     // Padding to reach 0xC8 (200).
     // BtRomConfig size is 21 bytes.
     // 172 + 21 = 193.
     // 200 - 193 = 7 bytes.
     pub _pad3: [u8; 7],
-    
+
     /// HCPU to LCPU IPC address (Letter Series only).
-    pub hcpu_ipc_addr: u32,    // 0xC8 (200)
+    pub hcpu_ipc_addr: u32, // 0xC8 (200)
 }
 
 /// BT/BLE specific configuration (A4+).
@@ -107,7 +107,7 @@ impl Default for RomConfig {
 impl RomControlBlock {
     /// Base address for A3 and earlier (fixed region).
     pub const ADDR_A3: usize = 0x2040_FDC0;
-    
+
     /// Base address for Letter Series (A4/B4) (Mailbox CH2).
     pub const ADDR_LETTER: usize = 0x2040_2A00;
 
@@ -135,7 +135,7 @@ pub struct PatchRegion;
 
 impl PatchRegion {
     // ===== A3 and earlier =====
-    
+
     /// Patch code start address for A3.
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:328`
     pub const A3_CODE_START: usize = 0x2040_6000;
@@ -190,23 +190,6 @@ impl LpsysRam {
     pub const CODE_START: usize = Self::BASE;
 }
 
-/// 将 BT TX 功率参数写入 LCPU ROM 配置区。
-///
-/// 对应 SDK 中 `HAL_LCPU_CONFIG_set(HAL_LCPU_CONFIG_BT_TX_PWR, ...)`，
-/// 写入偏移 20 处的 `bt_txpwr` 字段。
-/// 参考：`SiFli-SDK/drivers/cmsis/sf32lb52x/lcpu_config_type_int.h`.
-pub fn set_bt_tx_power(idr: &Idr, tx_pwr: u32) {
-    // LCPU_CONFIG_BT_TXPWR_ROM_OFFSET = 20
-    const BT_TXPWR_OFFSET: usize = 20;
-
-    let base = RomControlBlock::address(idr);
-    let addr = base + BT_TXPWR_OFFSET;
-
-    unsafe {
-        ptr::write_volatile(addr as *mut u32, tx_pwr);
-    }
-}
-
 //=============================================================================
 // Errors
 //=============================================================================
@@ -234,7 +217,7 @@ pub enum Error {
 pub fn rom_config(idr: &Idr, config: &RomConfig) -> Result<(), Error> {
     let base = RomControlBlock::address(idr);
     let is_letter = idr.revision().is_letter_series();
-    
+
     // Calculate size to clear/write.
     // A3: 0x40 (64 bytes)
     // Letter: 0xCC (204 bytes) -> sizeof(RomControlBlock) is 204
@@ -266,10 +249,10 @@ pub fn rom_config(idr: &Idr, config: &RomConfig) -> Result<(), Error> {
 
         // 4. Write Letter Series specific fields.
         if is_letter {
-             // HCPU IPC Address
+            // HCPU IPC Address
             ptr::write_volatile(
-                &mut block.hcpu_ipc_addr, 
-                RomControlBlock::HCPU2LCPU_MB_CH1_BUF_START_ADDR as u32
+                &mut block.hcpu_ipc_addr,
+                RomControlBlock::HCPU2LCPU_MB_CH1_BUF_START_ADDR as u32,
             );
 
             // BT Config
@@ -279,7 +262,7 @@ pub fn rom_config(idr: &Idr, config: &RomConfig) -> Result<(), Error> {
                 default_xtal_enabled: config.enable_lxt as u8,
                 ..Default::default()
             };
-            
+
             // Write BT config struct
             ptr::write_volatile(&mut block.bt_config, bt_cfg);
         }
@@ -330,4 +313,21 @@ pub fn img_install(idr: &Idr, image: &[u8]) -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+/// Write BT TX power parameters to LCPU ROM configuration area.
+///
+/// Corresponds to `HAL_LCPU_CONFIG_set(HAL_LCPU_CONFIG_BT_TX_PWR, ...)` in SDK,
+/// writes to `bt_txpwr` field at offset 20.
+/// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/lcpu_config_type_int.h`.
+pub fn set_bt_tx_power(idr: &Idr, tx_pwr: u32) {
+    // LCPU_CONFIG_BT_TXPWR_ROM_OFFSET = 20
+    const BT_TXPWR_OFFSET: usize = 20;
+
+    let base = RomControlBlock::address(idr);
+    let addr = base + BT_TXPWR_OFFSET;
+
+    unsafe {
+        ptr::write_volatile(addr as *mut u32, tx_pwr);
+    }
 }

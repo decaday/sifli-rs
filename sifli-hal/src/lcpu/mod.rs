@@ -692,8 +692,8 @@ fn install_patch_and_calibrate(config: &LcpuConfig, idr: &Idr) -> Result<(), Lcp
     if !config.disable_rf_cal {
         debug!("Performing RF calibration");
 
-        // 参考 SDK `lcpu_ble_patch_install`，在补丁安装后进行 BT RF 校准。
-        // 这里仅实现最小必要子集：复位 RFC 并写入 BT_TXPWR 配置。
+        // Reference SDK `lcpu_ble_patch_install`, perform BT RF calibration after patch installation.
+        // Here only the minimum necessary subset is implemented: reset RFC and write BT_TXPWR configuration.
         crate::lcpu::bt_cal::bt_rf_cal(idr);
     } else {
         warn!("RF calibration disabled by config");
