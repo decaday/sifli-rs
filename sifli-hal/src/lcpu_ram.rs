@@ -127,6 +127,54 @@ impl RomControlBlock {
     }
 }
 
+/// LCPU Patch memory layout (HCPU view).
+///
+/// Defines addresses for Patch code and buffers for different chip revisions.
+#[derive(Debug, Clone, Copy)]
+pub struct PatchRegion;
+
+impl PatchRegion {
+    // ===== A3 and earlier =====
+    
+    /// Patch code start address for A3.
+    /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:328`
+    pub const A3_CODE_START: usize = 0x2040_6000;
+
+    /// Patch record area address for A3.
+    /// Located at the last 256 bytes of the patch region.
+    /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:331` (`LCPU_PATCH_RECORD_ADDR`)
+    pub const A3_RECORD_ADDR: usize = 0x2040_7F00;
+
+    /// Total patch area size for A3.
+    /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:300`
+    pub const A3_TOTAL_SIZE: usize = 8 * 1024;
+
+    // ===== Letter Series (A4/B4) =====
+
+    /// Patch buffer start address.
+    /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:334`
+    pub const LETTER_BUF_START: usize = 0x2040_5000;
+
+    /// Patch code start address (after 12-byte header).
+    /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:335`
+    pub const LETTER_CODE_START: usize = 0x2040_500C;
+
+    /// Patch buffer size.
+    /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:337`
+    pub const LETTER_BUF_SIZE: usize = 0x3000; // 12KB
+
+    /// Patch code usable size.
+    /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:338`
+    pub const LETTER_CODE_SIZE: usize = 0x2FF4; // 12KB - 12 bytes
+
+    /// Letter Series patch header magic value ("PACH").
+    /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/lcpu_patch_rev_b.c:60`
+    pub const LETTER_MAGIC: u32 = 0x4843_4150;
+
+    /// Fixed entry_count value in header.
+    pub const LETTER_ENTRY_COUNT: u32 = 7;
+}
+
 /// LPSYS RAM layout (HCPU view, SF32LB52x).
 #[derive(Debug, Clone, Copy)]
 pub struct LpsysRam;

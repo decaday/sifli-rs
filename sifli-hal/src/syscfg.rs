@@ -120,7 +120,7 @@ impl ChipRevision {
             ChipRevision::A3OrEarlier(0x01) => "Pre-A3 (ES v0.1)",
             ChipRevision::A3OrEarlier(0x02) => "Pre-A3 (ES v0.2)",
             ChipRevision::A3OrEarlier(0x03) => "A3",
-            ChipRevision::A3OrEarlier(_) => "A3 or Earlier",
+            ChipRevision::A3OrEarlier(_) => unreachable!(),
             ChipRevision::A4 => "A4 (Letter Series)",
             ChipRevision::B4 => "B4 (Letter Series)",
             ChipRevision::Invalid(_) => "Invalid",
