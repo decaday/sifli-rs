@@ -13,8 +13,11 @@
 //! # Ok(()) }
 //! ```
 
-// Re-export related items
-pub use crate::lcpu_ram::{self, LpsysRam};
+// Re-export RAM management module
+pub mod ram;
+pub use ram::LpsysRam;
+
+mod bt_cal;
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -44,7 +47,7 @@ pub struct LcpuConfig {
     pub firmware: Option<&'static [u8]>,
 
     /// ROM configuration parameters.
-    pub rom: lcpu_ram::RomConfig,
+    pub rom: ram::RomConfig,
 
     /// Patch data for A3 and earlier (record + code format).
     pub patch_a3: Option<PatchData>,
@@ -64,7 +67,7 @@ impl LcpuConfig {
     pub const fn new() -> Self {
         Self {
             firmware: None,
-            rom: lcpu_ram::RomConfig {
+            rom: ram::RomConfig {
                 wdt_time: 10,
                 wdt_clk: 32_768,
                 enable_lxt: true,
@@ -118,7 +121,7 @@ pub struct PatchData {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum LcpuError {
     /// Image installation error.
-    ImageInstall(lcpu_ram::Error),
+    ImageInstall(ram::Error),
 
     /// Patch installation error.
     PatchInstall(patch::Error),
@@ -150,8 +153,8 @@ pub enum LcpuError {
     WakeCoreTimeout,
 }
 
-impl From<lcpu_ram::Error> for LcpuError {
-    fn from(err: lcpu_ram::Error) -> Self {
+impl From<ram::Error> for LcpuError {
+    fn from(err: ram::Error) -> Self {
         Self::ImageInstall(err)
     }
 }
@@ -525,7 +528,7 @@ impl<'d, M: crate::mode::Mode> Lcpu<'d, M> {
         // 3. Configure ROM parameters (bf0_lcpu_init.c:168).
         debug!("Step 3: Configuring ROM parameters");
         let idr = syscfg::read_idr();
-        lcpu_ram::rom_config(&idr, &config.rom)?;
+        ram::rom_config(&idr, &config.rom)?;
 
         // 4. Enforce frequency limit while loading (bf0_lcpu_init.c:170-176).
         if !config.skip_frequency_check {
@@ -540,7 +543,7 @@ impl<'d, M: crate::mode::Mode> Lcpu<'d, M> {
             debug!("Step 5: Installing LCPU firmware image (A3/earlier)");
 
             if let Some(firmware) = config.firmware {
-                lcpu_ram::img_install(&idr, firmware)?;
+                ram::img_install(&idr, firmware)?;
             } else {
                 error!("Firmware required for A3 and earlier revisions");
                 return Err(LcpuError::FirmwareMissing);
@@ -686,12 +689,12 @@ fn install_patch_and_calibrate(config: &LcpuConfig, idr: &Idr) -> Result<(), Lcp
         warn!("No patch data provided, skipping patch installation");
     }
 
-    // RF calibration (currently not implemented).
     if !config.disable_rf_cal {
         debug!("Performing RF calibration");
 
-        // TODO: call RF calibration routine (e.g. bt_rf_cal() in SDK).
-        todo!("install_patch_and_calibrate: RF calibration not implemented")
+        // 参考 SDK `lcpu_ble_patch_install`，在补丁安装后进行 BT RF 校准。
+        // 这里仅实现最小必要子集：复位 RFC 并写入 BT_TXPWR 配置。
+        crate::lcpu::bt_cal::bt_rf_cal(idr);
     } else {
         warn!("RF calibration disabled by config");
     }

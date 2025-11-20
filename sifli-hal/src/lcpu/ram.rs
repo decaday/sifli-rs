@@ -190,6 +190,23 @@ impl LpsysRam {
     pub const CODE_START: usize = Self::BASE;
 }
 
+/// 将 BT TX 功率参数写入 LCPU ROM 配置区。
+///
+/// 对应 SDK 中 `HAL_LCPU_CONFIG_set(HAL_LCPU_CONFIG_BT_TX_PWR, ...)`，
+/// 写入偏移 20 处的 `bt_txpwr` 字段。
+/// 参考：`SiFli-SDK/drivers/cmsis/sf32lb52x/lcpu_config_type_int.h`.
+pub fn set_bt_tx_power(idr: &Idr, tx_pwr: u32) {
+    // LCPU_CONFIG_BT_TXPWR_ROM_OFFSET = 20
+    const BT_TXPWR_OFFSET: usize = 20;
+
+    let base = RomControlBlock::address(idr);
+    let addr = base + BT_TXPWR_OFFSET;
+
+    unsafe {
+        ptr::write_volatile(addr as *mut u32, tx_pwr);
+    }
+}
+
 //=============================================================================
 // Errors
 //=============================================================================

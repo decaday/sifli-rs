@@ -20,7 +20,8 @@ async fn main(_spawner: Spawner) {
 
     let lcpu = Lcpu::new(p.HPSYS_AON, p.LPSYS_AON).into_async();
 
-    let cfg = LcpuConfig::default();
+    let mut cfg = LcpuConfig::default();
+    cfg.disable_rf_cal = false;
 
     match lcpu.power_on(&cfg).await {
         Ok(()) => info!("LCPU power-on succeeded"),

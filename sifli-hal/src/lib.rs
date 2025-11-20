@@ -27,7 +27,6 @@ pub mod dma;
 #[cfg(feature = "usb")]
 pub mod usb;
 pub mod efuse;
-pub mod lcpu_ram;
 pub mod lcpu;
 pub mod lpaon;
 pub mod hpaon;
