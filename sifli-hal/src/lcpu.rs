@@ -14,7 +14,7 @@
 //! ```
 
 // Re-export related items
-pub use crate::lcpu_img::{self, LpsysRam};
+pub use crate::lcpu_ram::{self, LpsysRam};
 
 use core::fmt;
 use core::marker::PhantomData;
@@ -43,6 +43,9 @@ pub struct LcpuConfig {
     /// - Letter Series: optional, firmware is in ROM.
     pub firmware: Option<&'static [u8]>,
 
+    /// ROM configuration parameters.
+    pub rom: lcpu_ram::RomConfig,
+
     /// Patch data for A3 and earlier (record + code format).
     pub patch_a3: Option<PatchData>,
 
@@ -61,6 +64,11 @@ impl LcpuConfig {
     pub const fn new() -> Self {
         Self {
             firmware: None,
+            rom: lcpu_ram::RomConfig {
+                wdt_time: 10,
+                wdt_clk: 32_768,
+                enable_lxt: true,
+            },
             patch_a3: None,
             patch_letter: None,
             skip_frequency_check: false,
@@ -110,7 +118,7 @@ pub struct PatchData {
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum LcpuError {
     /// Image installation error.
-    ImageInstall(lcpu_img::Error),
+    ImageInstall(lcpu_ram::Error),
 
     /// Patch installation error.
     PatchInstall(patch::Error),
@@ -142,8 +150,8 @@ pub enum LcpuError {
     WakeCoreTimeout,
 }
 
-impl From<lcpu_img::Error> for LcpuError {
-    fn from(err: lcpu_img::Error) -> Self {
+impl From<lcpu_ram::Error> for LcpuError {
+    fn from(err: lcpu_ram::Error) -> Self {
         Self::ImageInstall(err)
     }
 }
@@ -516,7 +524,8 @@ impl<'d, M: crate::mode::Mode> Lcpu<'d, M> {
     ) -> Result<(), LcpuError> {
         // 3. Configure ROM parameters (bf0_lcpu_init.c:168).
         debug!("Step 3: Configuring ROM parameters");
-        lcpu_rom_config()?;
+        let idr = syscfg::read_idr();
+        lcpu_ram::rom_config(&idr, &config.rom)?;
 
         // 4. Enforce frequency limit while loading (bf0_lcpu_init.c:170-176).
         if !config.skip_frequency_check {
@@ -527,12 +536,11 @@ impl<'d, M: crate::mode::Mode> Lcpu<'d, M> {
         }
 
         // 5. Install image for A3 and earlier (bf0_lcpu_init.c:178-182).
-        let idr = syscfg::read_idr();
         if !idr.revision().is_letter_series() {
             debug!("Step 5: Installing LCPU firmware image (A3/earlier)");
 
             if let Some(firmware) = config.firmware {
-                lcpu_img::install(&idr, firmware)?;
+                lcpu_ram::img_install(&idr, firmware)?;
             } else {
                 error!("Firmware required for A3 and earlier revisions");
                 return Err(LcpuError::FirmwareMissing);
@@ -570,127 +578,6 @@ impl<'d, M: crate::mode::Mode> Lcpu<'d, M> {
 
         Ok(())
     }
-}
-
-/// Configure LCPU ROM parameters (internal, SDK-aligned layout).
-fn lcpu_rom_config() -> Result<(), LcpuError> {
-    use core::{mem, ptr};
-
-    // ROM configuration for SF32LB52x; addresses/offsets from SDK:
-    // - SiFli-SDK/drivers/cmsis/sf32lb52x/lcpu_config_type_int.h
-    // - SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h
-
-    // Base address of LCPU ROM configuration context.
-    const LCPU_CONFIG_START_ADDR: usize = 0x2040_FDC0;
-    const LCPU_CONFIG_ROM_SIZE: usize = 0x40;
-    const LCPU_CONFIG_ROM_A4_SIZE: usize = 0xCC;
-    const LCPU_CONFIG_MAGIC_NUM: u32 = 0x4545_7878; // LPCU_CONFIG_MAGIC_NUM
-
-    // For Rev B (Letter Series), LCPU→HCPU mailbox channel 2 buffer is used as config area.
-    const LCPU2HCPU_MB_CH2_BUF_REV_B_START_ADDR: usize = 0x2040_2A00;
-
-    // HCPU→LCPU mailbox channel 1 base (TX queue base passed to ROM).
-    const HCPU2LCPU_MB_CH1_BUF_START_ADDR: usize = 0x2007_FE00;
-
-    // Offsets of individual fields within the config area (ROM view).
-    const OFFSET_WDT_TIME: usize = 12;
-    const OFFSET_WDT_STATUS: usize = 16;
-    const OFFSET_WDT_CLK: usize = 24;
-    const OFFSET_IS_XTAL_ENABLE: usize = 26;
-    const OFFSET_IS_RCCAL_IN_L: usize = 27;
-    const OFFSET_BT_ROM_CONFIG: usize = 172;
-    const OFFSET_HCPU_IPC_ADDR: usize = 200;
-
-    // BT ROM configuration layout, aligned with SDK.
-    #[repr(C)]
-    #[derive(Copy, Clone)]
-    struct LcpuBtRomConfig {
-        bit_valid: u32,
-        max_sleep_time: u32,
-        controller_enable_bit: u8,
-        lld_prog_delay: u8,
-        lld_prog_delay_min: u8,
-        default_sleep_mode: u8,
-        default_sleep_enabled: u8,
-        default_xtal_enabled: u8,
-        default_rc_cycle: u8,
-        default_swprofiling_cfg: u8,
-        boot_mode: u8,
-        is_fpga: u8,
-        en_inq_filter: u8,
-        support_3m: u8,
-        sco_cfg: u8,
-    }
-
-    // Read chip revision.
-    let idr = syscfg::read_idr();
-    let revision = idr.revision();
-
-    // Select configuration base and size:
-    // - A3 and earlier: fixed region at LCPU_CONFIG_START_ADDR.
-    // - A4 and later: use mailbox CH2 buffer.
-    let (base, size) = if revision.is_letter_series() {
-        (
-            LCPU2HCPU_MB_CH2_BUF_REV_B_START_ADDR,
-            LCPU_CONFIG_ROM_A4_SIZE,
-        )
-    } else {
-        (LCPU_CONFIG_START_ADDR, LCPU_CONFIG_ROM_SIZE)
-    };
-
-    debug!(
-        "Initializing LCPU ROM config: base=0x{:08X}, size={} (REVID=0x{:02X})",
-        base, size, revision
-    );
-
-    unsafe {
-        // Clear config area and write magic, equivalent to HAL_LCPU_CONIFG_init().
-        ptr::write_bytes(base as *mut u8, 0, size);
-        ptr::write_volatile(base as *mut u32, LCPU_CONFIG_MAGIC_NUM);
-
-        // Default parameters, aligned with lcpu_rom_config_default();
-        // USE_LXT: enable external low-speed crystal by default.
-        let is_enable_lxt: u8 = 1;
-        let is_lcpu_rccal: u8 = 1 - is_enable_lxt;
-        let wdt_status: u32 = 0xFF;
-        let wdt_time: u32 = 10;
-        let wdt_clk: u16 = 32_768;
-
-        // HAL_LCPU_CONFIG_XTAL_ENABLED
-        ptr::write_volatile((base + OFFSET_IS_XTAL_ENABLE) as *mut u8, is_enable_lxt);
-
-        // HAL_LCPU_CONFIG_WDT_STATUS
-        ptr::write_volatile((base + OFFSET_WDT_STATUS) as *mut u32, wdt_status);
-
-        // HAL_LCPU_CONFIG_WDT_TIME
-        ptr::write_volatile((base + OFFSET_WDT_TIME) as *mut u32, wdt_time);
-
-        // HAL_LCPU_CONFIG_WDT_CLK_FEQ
-        ptr::write_volatile((base + OFFSET_WDT_CLK) as *mut u16, wdt_clk);
-
-        // HAL_LCPU_CONFIG_BT_RC_CAL_IN_L
-        ptr::write_volatile((base + OFFSET_IS_RCCAL_IN_L) as *mut u8, is_lcpu_rccal);
-
-        // A4 and later require additional BT ROM configuration.
-        if revision.is_letter_series() {
-            // HAL_LCPU_CONFIG_HCPU_TX_QUEUE
-            let tx_queue: u32 = HCPU2LCPU_MB_CH1_BUF_START_ADDR as u32;
-            ptr::write_volatile((base + OFFSET_HCPU_IPC_ADDR) as *mut u32, tx_queue);
-
-            // HAL_LCPU_CONFIG_BT_CONFIG
-            let mut config: LcpuBtRomConfig = mem::zeroed();
-            // Only bits [10] and [6] are valid here, per SDK.
-            config.bit_valid = (1 << 10) | (1 << 6);
-            config.is_fpga = 0;
-            config.default_xtal_enabled = is_enable_lxt;
-
-            let src = &config as *const LcpuBtRomConfig as *const u8;
-            let dst = (base + OFFSET_BT_ROM_CONFIG) as *mut u8;
-            ptr::copy_nonoverlapping(src, dst, mem::size_of::<LcpuBtRomConfig>());
-        }
-    }
-
-    Ok(())
 }
 
 /// Ensure LPSYS HCLK stays ≤ 24 MHz while loading the LCPU image.
