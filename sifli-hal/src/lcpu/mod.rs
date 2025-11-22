@@ -24,7 +24,7 @@ use core::marker::PhantomData;
 use core::sync::atomic::{AtomicU8, Ordering};
 
 use crate::peripherals;
-use crate::syscfg::{self, Idr};
+use crate::syscfg::{self, ChipRevision};
 use crate::Peripheral;
 use crate::{hpaon, lpaon, patch};
 
@@ -528,7 +528,8 @@ impl<'d, M: crate::mode::Mode> Lcpu<'d, M> {
         // 3. Configure ROM parameters (bf0_lcpu_init.c:168).
         debug!("Step 3: Configuring ROM parameters");
         let idr = syscfg::read_idr();
-        ram::rom_config(&idr, &config.rom)?;
+        let revision = idr.revision();
+        ram::rom_config(revision, &config.rom)?;
 
         // 4. Enforce frequency limit while loading (bf0_lcpu_init.c:170-176).
         if !config.skip_frequency_check {
@@ -539,11 +540,11 @@ impl<'d, M: crate::mode::Mode> Lcpu<'d, M> {
         }
 
         // 5. Install image for A3 and earlier (bf0_lcpu_init.c:178-182).
-        if !idr.revision().is_letter_series() {
+        if !revision.is_letter_series() {
             debug!("Step 5: Installing LCPU firmware image (A3/earlier)");
 
             if let Some(firmware) = config.firmware {
-                ram::img_install(&idr, firmware)?;
+                ram::img_install(revision, firmware)?;
             } else {
                 error!("Firmware required for A3 and earlier revisions");
                 return Err(LcpuError::FirmwareMissing);
@@ -561,7 +562,7 @@ impl<'d, M: crate::mode::Mode> Lcpu<'d, M> {
 
         // 7. Install patches and perform RF calibration (bf0_lcpu_init.c:185).
         debug!("Step 7: Installing patches and RF calibration");
-        install_patch_and_calibrate(config, &idr)?;
+        install_patch_and_calibrate(config, revision)?;
 
         // 8. Release LCPU to run (bf0_lcpu_init.c:186).
         debug!("Step 8: Releasing LCPU to run");
@@ -663,9 +664,7 @@ fn check_lcpu_frequency() -> Result<(), LcpuError> {
 /// # Errors
 ///
 /// - [`LcpuError::PatchInstall`][]: patch installation failed.
-fn install_patch_and_calibrate(config: &LcpuConfig, idr: &Idr) -> Result<(), LcpuError> {
-    let revision = idr.revision();
-
+fn install_patch_and_calibrate(config: &LcpuConfig, revision: ChipRevision) -> Result<(), LcpuError> {
     // Choose patch data based on revision.
     let patch_data = if revision.is_letter_series() {
         debug!("Using Letter Series patch data");
@@ -684,7 +683,7 @@ fn install_patch_and_calibrate(config: &LcpuConfig, idr: &Idr) -> Result<(), Lcp
         );
 
         // Use patch module to install the patch.
-        patch::install(idr, data.list, data.bin)?;
+        patch::install(revision, data.list, data.bin)?;
     } else {
         warn!("No patch data provided, skipping patch installation");
     }
@@ -694,7 +693,7 @@ fn install_patch_and_calibrate(config: &LcpuConfig, idr: &Idr) -> Result<(), Lcp
 
         // Reference SDK `lcpu_ble_patch_install`, perform BT RF calibration after patch installation.
         // Here only the minimum necessary subset is implemented: reset RFC and write BT_TXPWR configuration.
-        crate::lcpu::bt_cal::bt_rf_cal(idr);
+        crate::lcpu::bt_cal::bt_rf_cal(revision);
     } else {
         warn!("RF calibration disabled by config");
     }

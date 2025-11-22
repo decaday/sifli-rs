@@ -9,7 +9,7 @@
 
 use super::ram;
 use crate::lpsys_rcc::{get_rfc_reset, set_rfc_reset};
-use crate::syscfg::Idr;
+use crate::syscfg::ChipRevision;
 
 /// Reset Bluetooth RF module.
 ///
@@ -57,7 +57,7 @@ fn encode_tx_power(max: i8, min: i8, init: i8, is_bqb: u8) -> u32 {
 ///
 /// Note: This does not perform the complete analog RF self-calibration flow in SDK, only guarantees
 /// configuration fields required for LCPU startup are correctly set.
-pub fn bt_rf_cal(idr: &Idr) {
+pub fn bt_rf_cal(revision: ChipRevision) {
     // 1. Reset Bluetooth RF
     reset_bluetooth_rf();
 
@@ -66,5 +66,5 @@ pub fn bt_rf_cal(idr: &Idr) {
     let tx_pwr = encode_tx_power(max_pwr, min_pwr, init_pwr, is_bqb);
 
     // 3. Write to LCPU ROM configuration area (BT_TXPWR)
-    ram::set_bt_tx_power(idr, tx_pwr);
+    ram::set_bt_tx_power(revision, tx_pwr);
 }

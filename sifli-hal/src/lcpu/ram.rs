@@ -3,7 +3,7 @@
 //! This module unifies LCPU memory operations, including configuring ROM parameters
 //! and loading firmware images into LPSYS RAM.
 
-use crate::syscfg::Idr;
+use crate::syscfg::ChipRevision;
 use core::{mem, ptr};
 
 //=============================================================================
@@ -118,8 +118,8 @@ impl RomControlBlock {
     pub const MAGIC: u32 = 0x4545_7878;
 
     /// Get the configuration base address for the given chip revision.
-    pub fn address(idr: &Idr) -> usize {
-        if idr.revision().is_letter_series() {
+    pub fn address(revision: ChipRevision) -> usize {
+        if revision.is_letter_series() {
             Self::ADDR_LETTER
         } else {
             Self::ADDR_A3
@@ -214,9 +214,9 @@ pub enum Error {
 /// Configure LCPU ROM parameters.
 ///
 /// Replaces `lcpu_rom_config`.
-pub fn rom_config(idr: &Idr, config: &RomConfig) -> Result<(), Error> {
-    let base = RomControlBlock::address(idr);
-    let is_letter = idr.revision().is_letter_series();
+pub fn rom_config(revision: ChipRevision, config: &RomConfig) -> Result<(), Error> {
+    let base = RomControlBlock::address(revision);
+    let is_letter = revision.is_letter_series();
 
     // Calculate size to clear/write.
     // A3: 0x40 (64 bytes)
@@ -274,15 +274,15 @@ pub fn rom_config(idr: &Idr, config: &RomConfig) -> Result<(), Error> {
 /// Install LCPU firmware image.
 ///
 /// Replaces `lcpu_img::install`.
-pub fn img_install(idr: &Idr, image: &[u8]) -> Result<(), Error> {
+pub fn img_install(revision: ChipRevision, image: &[u8]) -> Result<(), Error> {
     if image.is_empty() {
         return Err(Error::EmptyImage);
     }
 
-    let revision = idr.revision();
-
     if !revision.is_valid() {
-        return Err(Error::InvalidRevision { revid: idr.revid });
+        return Err(Error::InvalidRevision {
+            revid: revision.revid(),
+        });
     }
 
     // Only A3 or Earlier is required to load LCPU image
@@ -320,11 +320,11 @@ pub fn img_install(idr: &Idr, image: &[u8]) -> Result<(), Error> {
 /// Corresponds to `HAL_LCPU_CONFIG_set(HAL_LCPU_CONFIG_BT_TX_PWR, ...)` in SDK,
 /// writes to `bt_txpwr` field at offset 20.
 /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/lcpu_config_type_int.h`.
-pub fn set_bt_tx_power(idr: &Idr, tx_pwr: u32) {
+pub fn set_bt_tx_power(revision: ChipRevision, tx_pwr: u32) {
     // LCPU_CONFIG_BT_TXPWR_ROM_OFFSET = 20
     const BT_TXPWR_OFFSET: usize = 20;
 
-    let base = RomControlBlock::address(idr);
+    let base = RomControlBlock::address(revision);
     let addr = base + BT_TXPWR_OFFSET;
 
     unsafe {
