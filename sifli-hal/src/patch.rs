@@ -139,7 +139,8 @@ pub fn hal_patch_install(record_addr: usize) -> Result<u32, Error> {
     if header.tag != PatchRegion::A3_MAGIC {
         debug!(
             "Patch record invalid: tag=0x{:08X}, expected=0x{:08X}",
-            header.tag, PatchRegion::A3_MAGIC
+            header.tag,
+            PatchRegion::A3_MAGIC
         );
         return Err(Error::InvalidRecordMagic {
             actual: header.tag,
@@ -188,14 +189,11 @@ fn hal_patch_install_entries(entries_addr: usize, count: usize) -> Result<u32, E
 
     for i in 0..count {
         // SAFETY: entries_addr + i * size is within the valid record area
-        let entry = unsafe { *((entries_addr + i * core::mem::size_of::<PatchEntry>()) as *const PatchEntry) };
+        let entry = unsafe {
+            *((entries_addr + i * core::mem::size_of::<PatchEntry>()) as *const PatchEntry)
+        };
 
         let addr_masked = entry.break_addr & PATCH_ADDR_MASK;
-
-        debug!(
-            "  CH[{}]: addr=0x{:08X}, data=0x{:08X}",
-            i, addr_masked, entry.data
-        );
 
         // Write breakpoint address to channel register (bits 18:2)
         patch.ch(i).write(|w| w.set_addr(addr_masked >> 2));
@@ -292,13 +290,13 @@ fn install_a3(list: &[u8], bin: &[u8]) -> Result<(), Error> {
     let record_addr = PatchRegion::A3_RECORD_ADDR;
     // SAFETY: A3_RECORD_ADDR is a valid LCPU RAM address
     unsafe {
-        core::ptr::copy_nonoverlapping(
-            list.as_ptr(),
-            record_addr as *mut u8,
-            list.len(),
-        );
+        core::ptr::copy_nonoverlapping(list.as_ptr(), record_addr as *mut u8, list.len());
     }
-    debug!("  Record copied to 0x{:08X} ({} bytes)", record_addr, list.len());
+    debug!(
+        "  Record copied to 0x{:08X} ({} bytes)",
+        record_addr,
+        list.len()
+    );
 
     // Log first few words of the record for debugging
     #[cfg(feature = "defmt")]
@@ -316,7 +314,10 @@ fn install_a3(list: &[u8], bin: &[u8]) -> Result<(), Error> {
     // Step 2: Configure PATCH hardware (reads from RAM we just wrote)
     match hal_patch_install(record_addr) {
         Ok(mask) => {
-            debug!("  PATCH HW configured: {} channels enabled", mask.count_ones());
+            debug!(
+                "  PATCH HW configured: {} channels enabled",
+                mask.count_ones()
+            );
         }
         Err(e) => {
             warn!("  PATCH HW install failed: {:?}", e);
@@ -387,12 +388,18 @@ fn install_letter(_list: &[u8], bin: &[u8]) -> Result<(), Error> {
     // Note: Letter series header format differs from A3, may not parse correctly
     match hal_patch_install(header_addr) {
         Ok(mask) => {
-            debug!("  PATCH HW configured: {} channels enabled", mask.count_ones());
+            debug!(
+                "  PATCH HW configured: {} channels enabled",
+                mask.count_ones()
+            );
         }
         Err(e) => {
             // For Letter series, the header format is different
             // The patch code still gets executed via HAL_PATCH_Entry mechanism
-            debug!("  PATCH HW install skipped (expected for Letter series): {:?}", e);
+            debug!(
+                "  PATCH HW install skipped (expected for Letter series): {:?}",
+                e
+            );
         }
     }
 

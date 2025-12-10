@@ -18,7 +18,6 @@ pub mod i2c;
 pub mod timer;
 pub mod time;
 pub mod pmu;
-pub mod lpsys_rcc;
 pub mod patch;
 pub mod syscfg;
 #[allow(clippy::all)] // modified from embassy-stm32
@@ -35,7 +34,6 @@ pub mod usb;
 pub mod efuse;
 pub mod lcpu;
 pub mod lpaon;
-pub mod hpaon;
 #[cfg(feature = "_time-driver")]
 pub mod time_driver;
 

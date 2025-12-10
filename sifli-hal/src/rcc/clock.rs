@@ -5,7 +5,8 @@ pub use crate::pac::hpsys_rcc::vals::mux::{
     Lpsel, Mpisel, Perisel, Rtcsel, Ticksel, Usbsel, Wdtsel,
 };
 pub use crate::pac::hpsys_rcc::vals::{Dllstg as DllStage, Pdiv as PclkPrescaler, Sysclk};
-use crate::pac::{HPSYS_AON, HPSYS_RCC};
+use crate::pac::lpsys_rcc::vals as lpsys_vals;
+use crate::pac::{HPSYS_AON, HPSYS_RCC, LPSYS_RCC};
 use core::mem::MaybeUninit;
 use core::sync::atomic::{compiler_fence, AtomicU8, Ordering};
 
@@ -109,6 +110,55 @@ pub(crate) fn get_clk_usb_source() -> Usbsel {
 /// Get USB clock divider from hardware registers
 pub(crate) fn get_clk_usb_div() -> u8 {
     HPSYS_RCC.usbcr().read().div()
+}
+
+/// Read LPSYS HCLK divider (HDIV1).
+pub fn get_lpsys_hclk_div() -> u8 {
+    LPSYS_RCC.cfgr().read().hdiv1().to_bits()
+}
+
+/// Get current LPSYS HCLK frequency from hardware registers.
+pub fn get_lpsys_hclk_freq() -> Option<Hertz> {
+    let csr = LPSYS_RCC.csr().read();
+    let clk_lpsys = match csr.sel_sys() {
+        lpsys_vals::Sysclk::Hrc48 => get_hrc48_freq()?,
+        lpsys_vals::Sysclk::Hxt48 => get_hxt48_freq()?,
+    };
+
+    let hdiv = LPSYS_RCC.cfgr().read().hdiv1().to_bits();
+    let divisor = if hdiv == 0 { 1 } else { hdiv as u32 };
+
+    Some(clk_lpsys / divisor)
+}
+
+/// Assert or deassert LCPU reset in LPSYS domain.
+pub fn set_lp_lcpu_reset(enable: bool) {
+    LPSYS_RCC.rstr1().modify(|w| w.set_lcpu(enable));
+}
+
+/// Assert or deassert MAC reset in LPSYS domain.
+pub fn set_lp_mac_reset(enable: bool) {
+    LPSYS_RCC.rstr1().modify(|w| w.set_mac(enable));
+}
+
+/// Assert or deassert RFC reset in LPSYS domain.
+pub fn set_lp_rfc_reset(enable: bool) {
+    LPSYS_RCC.rstr1().modify(|w| w.set_rfc(enable));
+}
+
+/// Check whether LCPU reset bit is asserted.
+pub fn lp_lcpu_reset_asserted() -> bool {
+    LPSYS_RCC.rstr1().read().lcpu()
+}
+
+/// Check whether MAC reset bit is asserted.
+pub fn lp_mac_reset_asserted() -> bool {
+    LPSYS_RCC.rstr1().read().mac()
+}
+
+/// Check whether RFC reset bit is asserted.
+pub fn lp_rfc_reset_asserted() -> bool {
+    LPSYS_RCC.rstr1().read().rfc()
 }
 
 pub const CLK_LRC10_FREQ: Hertz = Hertz(100_000);
@@ -422,12 +472,12 @@ pub struct Clocks {
     pub clk_wdt: MaybeHertz,
     /// RTC clock (from RTC.CR.LPCKSEL: LRC10K or LXT32K)
     pub clk_rtc: MaybeHertz,
-    
+
     /// MPI1/Flash1 clock
     pub clk_mpi1: MaybeHertz,
     /// MPI2/Flash2 clock
     pub clk_mpi2: MaybeHertz,
-    
+
     /// Audio PLL clock (managed by AUDCODEC driver, not RCC)
     pub clk_aud_pll: MaybeHertz,
     /// Audio PLL / 16 clock
@@ -506,7 +556,7 @@ pub(crate) unsafe fn init(config: Config) {
             w.set_pdiv2(config.pdiv2);
         });
 
-        let sysclk = config.get_sysclk_freq();
+        let _sysclk = config.get_sysclk_freq();
         let hclk = config.get_hclk_freq();
         let current_hclk = get_hclk_freq().unwrap_or(Hertz(48_000_000));
 
@@ -886,7 +936,7 @@ impl ConfigBuilder {
         self.config
     }
 
-    pub fn config_hclk_mhz(self, hclk_mhz: u32) -> Self {
+    pub fn config_hclk_mhz(self, _hclk_mhz: u32) -> Self {
         todo!()
     }
 }

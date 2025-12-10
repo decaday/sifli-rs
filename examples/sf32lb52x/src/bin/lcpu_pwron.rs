@@ -18,11 +18,11 @@ async fn main(_spawner: Spawner) {
 
     info!("Starting LCPU power-on example");
 
-    let lcpu = Lcpu::new(p.HPSYS_AON, p.LPSYS_AON).into_async();
+    let lcpu = Lcpu::new(p.LPSYS_AON);
 
     let cfg = LcpuConfig::default();
 
-    match lcpu.power_on(&cfg).await {
+    match lcpu.power_on(&cfg) {
         Ok(()) => info!("LCPU power-on succeeded"),
         Err(e) => {
             warn!("LCPU power-on failed: {:?}", e);

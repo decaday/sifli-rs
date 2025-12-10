@@ -8,7 +8,7 @@
 //! `SiFli-SDK/drivers/cmsis/sf32lb52x/bt_rf_fulcal.c`) are not yet ported.
 
 use super::ram;
-use crate::lpsys_rcc::{get_rfc_reset, set_rfc_reset};
+use crate::rcc::{lp_rfc_reset_asserted, set_lp_rfc_reset};
 use crate::syscfg::ChipRevision;
 
 /// Reset Bluetooth RF module.
@@ -16,11 +16,11 @@ use crate::syscfg::ChipRevision;
 /// Corresponds to `HAL_RCC_ResetBluetoothRF` in SDK.
 fn reset_bluetooth_rf() {
     // Set RFC reset bit
-    set_rfc_reset(true);
+    set_lp_rfc_reset(true);
     // Wait for bit to take effect
-    while !get_rfc_reset() {}
+    while !lp_rfc_reset_asserted() {}
     // Clear RFC reset bit
-    set_rfc_reset(false);
+    set_lp_rfc_reset(false);
 }
 
 /// Default BT RF power parameters.
