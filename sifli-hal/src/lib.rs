@@ -22,6 +22,8 @@ pub mod adc;
 pub mod lcdc;
 #[allow(clippy::all)] // modified from embassy-stm32
 pub mod dma;
+#[cfg(feature = "sf32lb52x")]
+pub mod ipc;
 #[cfg(feature = "usb")]
 pub mod usb;
 #[cfg(feature = "_time-driver")]
