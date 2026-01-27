@@ -28,6 +28,8 @@ pub mod lcdc;
 #[allow(clippy::all)] // modified from embassy-stm32
 pub mod dma;
 pub mod mailbox;
+#[cfg(feature = "sf32lb52x")]
+pub mod ipc;
 #[cfg(feature = "usb")]
 pub mod usb;
 pub mod efuse;
