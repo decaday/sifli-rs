@@ -1,7 +1,7 @@
 # pinmux_signal: signal in pinmux. e.g. PA00_I2C_UART, LCDC1_8080_DIO6
 
 # Avaliable inserts:
-# peripheral_nomux: 
+# peripheral_nomux:
 #   $peripheral = signal.split("_")[0]
 #     e.g. LCDC1_SPI_RSTB -> LCDC1
 # peripheral_mux:
@@ -23,10 +23,16 @@ hcpu:
   - name: PA.*_TIM
     type: superimposed
     signals:
-      - ATIM
-      - GPTIM
-      - LPTIM
-  
+      - GPTIM  # Only GPTIM for now, ATIM has complex multi-register PINR
+      # - ATIM  # TODO: ATIM uses PINR1/2/3, need special handling
+      # - LPTIM  # TODO: Add LPTIM support later
+
+  # GPTIM pin signals (auto-generated)
+  - name: GPTIM
+    type: peripheral_mux
+    pin_trait:
+      crate::timer::TimerPin<$peripheral, crate::timer::$cfg_pin>
+
   - name: USART
     type: peripheral_mux
     pin_trait:

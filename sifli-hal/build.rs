@@ -213,12 +213,12 @@ fn generate_rcc_impls(peripherals: &Peripherals, fieldsets: &BTreeMap<String, Fi
     implementations.extend(quote! {use crate::time::Hertz;});
     for peripheral in &peripherals.hcpu {
         if let Some(clock) = peripheral.clock.clone() {
-            let clock_fn_ident = format_ident!("get_{}_freq", clock);
+            let clock_name_ident = format_ident!("{}", clock);
             let peripheral_name_ident = format_ident!("{}", peripheral.name);
             let impl_tokens = quote! {
                 impl crate::rcc::SealedRccGetFreq for #peripheral_name_ident {
                     fn get_freq() -> Option<Hertz> {
-                        crate::rcc::#clock_fn_ident()
+                        crate::rcc::clocks().#clock_name_ident.into()
                     }
                 }
                 impl crate::rcc::RccGetFreq for #peripheral_name_ident {}
@@ -406,11 +406,26 @@ fn generate_signal_peripheral_mux_impls(
 
             for field in &fieldset.fields {
                 if field.name.ends_with("_PIN") {
-                    // Trait name. First letter upper case
+                    // Generate cfg_pin type name from field name
+                    // Examples:
+                    //   TXD_PIN -> TxdPin (USART)
+                    //   CH1_PIN -> Ch1 (Timer, special case)
                     let name = field.name.replace("_PIN", "").to_lowercase();
-                    let cfg_pin = format!("{}Pin", 
-                        name.chars().next().unwrap_or_default().to_uppercase().to_string() + 
-                        &name[1..]);
+                    
+                    // Special case for Timer channels: CH1 -> Ch1 (not Ch1Pin)
+                    // This keeps consistency with embassy-stm32
+                    let cfg_pin = if signal.starts_with("GPTIM") || signal.starts_with("ATIM") || signal.starts_with("LPTIM") {
+                        // Timer: "ch1" -> "Ch1", "ch2" -> "Ch2"
+                        format!("{}{}", 
+                            name.chars().next().unwrap_or_default().to_uppercase(), 
+                            &name[1..])
+                    } else {
+                        // Other peripherals: "txd" -> "TxdPin"
+                        format!("{}Pin", 
+                            name.chars().next().unwrap_or_default().to_uppercase().to_string() + 
+                            &name[1..])
+                    };
+                    
                     let trait_path_str = signal_def.pin_trait.clone().unwrap()
                         .replace("$peripheral", &peripheral)
                         .replace("$cfg_pin", &cfg_pin);
@@ -421,6 +436,25 @@ fn generate_signal_peripheral_mux_impls(
                     let set_field = format_ident!("set_{}", field.name.to_lowercase());
                     let func_value = func.value;
 
+                    // Determine if this is a Timer signal (special handling for PINR)
+                    let is_timer = signal.starts_with("GPTIM") || signal.starts_with("ATIM") || signal.starts_with("LPTIM");
+                    
+                    let set_cfg_pin_impl = if is_timer {
+                        // Timer PINR: Use pin number (0-44)
+                        quote! {
+                            crate::pac::HPSYS_CFG.#reg_name().modify(|w| 
+                                w.#set_field(self.pin() as _)
+                            );
+                        }
+                    } else {
+                        // Other peripherals: Use pin_bank()
+                        quote! {
+                            crate::pac::HPSYS_CFG.#reg_name().modify(|w| 
+                                w.#set_field(self.pin_bank() as _)
+                            );
+                        }
+                    };
+                    
                     implementations.extend(quote! {
                         impl #trait_path for #pin_ident {
                             fn fsel(&self) -> u8 {
@@ -428,9 +462,7 @@ fn generate_signal_peripheral_mux_impls(
                             }
 
                             fn set_cfg_pin(&self) {
-                                crate::pac::HPSYS_CFG.#reg_name().modify(|w| 
-                                    w.#set_field(self.pin_bank() as _)
-                                );
+                                #set_cfg_pin_impl
                             }
                         }
                     });

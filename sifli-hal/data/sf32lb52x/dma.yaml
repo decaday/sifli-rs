@@ -21,22 +21,27 @@ hcpu:
         id: 7
       - name: gptim1_update
         id: 8
-        used: false
+        used: true
+        module: timer
       - name: gptim1_trigger
         id: 9
         used: false
       - name: gptim1_cc1
         id: 10
-        used: false
+        used: true
+        module: timer
       - name: gptim1_cc2
         id: 11
-        used: false
+        used: true
+        module: timer
       - name: gptim1_cc3
         id: 12
-        used: false
+        used: true
+        module: timer
       - name: gptim1_cc4
         id: 13
-        used: false
+        used: true
+        module: timer
       - name: btim1
         id: 14
         used: false
@@ -118,13 +123,15 @@ hcpu:
         used: false
       - name: gptim2_update
         id: 43
-        used: false
+        used: true
+        module: timer
       - name: gptim2_trigger
         id: 44
         used: false
       - name: gptim2_cc1
         id: 45
-        used: false
+        used: true
+        module: timer
       - name: audprc_tx_out_ch1
         id: 46
         used: false
@@ -151,13 +158,16 @@ hcpu:
         used: false
       - name: gptim2_cc2
         id: 54
-        used: false
+        used: true
+        module: timer
       - name: gptim2_cc3
         id: 55
-        used: false
+        used: true
+        module: timer
       - name: gptim2_cc4
         id: 56
-        used: false
+        used: true
+        module: timer
       - name: sdmmc1
         id: 57
         used: false
