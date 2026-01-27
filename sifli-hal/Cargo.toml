@@ -13,7 +13,7 @@ license = "Apache-2.0"
 
 [dependencies]
 # sifli-pac = { version = "0.2.0", path = "../../sifli-pac" }
-sifli-pac = { version = "0.2.0", git = "https://github.com/Ic-arbon/sifli-pac.git", branch = "test/rcc-enums" }
+sifli-pac = { version = "0.2.0", git = "https://github.com/Ic-arbon/sifli-pac.git", branch = "dev/rcc-enums" }
 # sifli-pac = { version = "0.2.0", git = "https://github.com/OpenSiFli/sifli-pac" }
 
 embassy-sync = { version = "0.7" }
@@ -92,6 +92,7 @@ usb = ["musb"]
 unstable-pac = []
 
 sf32lb52x = ["sifli-pac/sf32lb52x", "musb?/builtin-sf32lb52x"]
+sf32lb52x-lcpu = ["sf32lb52x"]
 
 time-driver-atim1 = ["_time-driver-atim"]
 time-driver-gptim1 = ["_time-driver-gptim"]

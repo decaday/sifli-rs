@@ -26,7 +26,7 @@ use embassy_usb::UsbDevice;
 
 use sifli_hal::bind_interrupts;
 use sifli_hal::rcc::{Dll, DllStage, Sysclk};
-use sifli_hal::rcc::mux::Usbsel;
+use sifli_hal::rcc::Usbsel;
 use sifli_hal::usb::{Driver, InterruptHandler, Instance};
 
 
@@ -44,19 +44,19 @@ async fn main(spawner: Spawner) {
     
     // Configure 240MHz system clock using DLL1
     // DLL1 Freq = (stg + 1) * 24MHz = (9 + 1) * 24MHz = 240MHz
-    config.rcc.sys = Sysclk::DLL1;
+    config.rcc.sys = Sysclk::Dll1;
     config.rcc.dll1 = Some(Dll {
         out_div2: false,
-        stg: DllStage::MUL10,  // MUL10 = stg 9
+        stg: DllStage::Mul10,  // Mul10 = stg 9
     });
-    
+
     // Configure DLL2 for USB at 240MHz
     // USB will be 240MHz / 4 = 60MHz (required by USB PHY)
     config.rcc.dll2 = Some(Dll {
         out_div2: false,
-        stg: DllStage::MUL10,
+        stg: DllStage::Mul10,
     });
-    config.rcc.mux.usbsel = Usbsel::DLL2;
+    config.rcc.mux.usbsel = Usbsel::Dll2;
     
     let p = sifli_hal::init(config);
 

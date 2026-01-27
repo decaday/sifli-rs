@@ -20,6 +20,7 @@ embassy-futures = "0.1.2"
 
 embedded-io = { version = "0.6.0" }
 embedded-io-async = { version = "0.6.1" }
+embedded-hal-async = { version = "1.0" }
 
 defmt = "1"
 defmt-rtt = "1"

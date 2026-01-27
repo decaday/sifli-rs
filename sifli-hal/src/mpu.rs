@@ -3,6 +3,7 @@
 //! 目前最关键的目标：让跨核共享 SRAM（HPSYS/LPSYS）为 non-cacheable，
 //! 以匹配 SiFli SDK `mpu_config()` 的行为，避免 IPC ring buffer 因 DCache 产生不一致。
 
+use core::ptr;
 use cortex_m::asm;
 
 /// SiFli SDK `mpu_armv8.h`: `ARM_MPU_ATTR_NON_CACHEABLE=4`, `ARM_MPU_ATTR(O,I)=(O<<4)|I`（当 O!=0）。
@@ -15,6 +16,11 @@ const MPU_CTRL_PRIVDEFENA: u32 = 1 << 2;
 
 const MPU_RBAR_SH_NON: u32 = 0;
 const MPU_RBAR_AP_RW_ANY: u32 = 0b01; // ARM_MPU_AP_(RO=0, NP=1)
+
+// ARMv8-M MPU registers not available in cortex-m 0.7 RegisterBlock.
+// MPU base = 0xE000_ED90.
+const MPU_RLAR: *mut u32 = 0xE000_EDA0 as *mut u32;
+const MPU_MAIR0: *mut u32 = 0xE000_EDC0 as *mut u32;
 
 #[inline]
 const fn mpu_rbar(base: u32, sh: u32, ap: u32, xn: bool) -> u32 {
@@ -46,17 +52,17 @@ pub(crate) unsafe fn init() {
     asm::isb();
 
     // Attr0: non-cacheable normal memory。
-    mpu.mair[0].write(ATTR_NON_CACHEABLE_NORMAL);
+    ptr::write_volatile(MPU_MAIR0, ATTR_NON_CACHEABLE_NORMAL);
 
     // Region 0: HPSYS SRAM non-cacheable。
     mpu.rnr.write(0);
     mpu.rbar.write(mpu_rbar(0x2000_0000, MPU_RBAR_SH_NON, MPU_RBAR_AP_RW_ANY, false));
-    mpu.rlar.write(mpu_rlar(0x2027_FFFF, 0));
+    ptr::write_volatile(MPU_RLAR, mpu_rlar(0x2027_FFFF, 0));
 
     // Region 1: LPSYS SRAM non-cacheable。
     mpu.rnr.write(1);
     mpu.rbar.write(mpu_rbar(0x203F_C000, MPU_RBAR_SH_NON, MPU_RBAR_AP_RW_ANY, false));
-    mpu.rlar.write(mpu_rlar(0x204F_FFFF, 0));
+    ptr::write_volatile(MPU_RLAR, mpu_rlar(0x204F_FFFF, 0));
 
     // 开启 MPU：保留默认内存映射（PRIVDEFENA），避免未覆盖区域直接 fault。
     mpu.ctrl
@@ -67,13 +73,13 @@ pub(crate) unsafe fn init() {
 
     // 便于在日志中确认 MPU 确实已配置/生效。
     let ctrl = mpu.ctrl.read();
-    let mair0 = mpu.mair[0].read();
+    let mair0 = ptr::read_volatile(MPU_MAIR0);
     mpu.rnr.write(0);
     let r0_rbar = mpu.rbar.read();
-    let r0_rlar = mpu.rlar.read();
+    let r0_rlar = ptr::read_volatile(MPU_RLAR);
     mpu.rnr.write(1);
     let r1_rbar = mpu.rbar.read();
-    let r1_rlar = mpu.rlar.read();
+    let r1_rlar = ptr::read_volatile(MPU_RLAR);
     debug!(
         "mpu: ctrl=0x{:08X} mair0=0x{:08X} r0=(rbar=0x{:08X} rlar=0x{:08X}) r1=(rbar=0x{:08X} rlar=0x{:08X})",
         ctrl,
