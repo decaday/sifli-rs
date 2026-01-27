@@ -92,6 +92,8 @@ hcpu:
     clock: clk_wdt
   - name: LPSYS_AON
     enable_reset: false
+  - name: PATCH
+    enable_reset: false
   - name: LPTIM1
     enable_reset: false
     clock: clk_rtc

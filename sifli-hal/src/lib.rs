@@ -19,6 +19,7 @@ pub mod timer;
 pub mod time;
 pub mod pmu;
 pub mod lpsys_rcc;
+pub mod patch;
 pub mod syscfg;
 #[allow(clippy::all)] // modified from embassy-stm32
 pub mod usart;
