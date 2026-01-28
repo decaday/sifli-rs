@@ -1,465 +1,309 @@
-//! Mailbox HAL driver
+//! Mailbox driver for inter-processor communication
 //!
-//! Provides hardware mailbox for inter-processor communication on SF32LB52x chips.
+//! ## Hardware Overview
 //!
-//! ## Hardware Architecture
+//! - **MAILBOX1** (4 channels): HCPU writes ITR → triggers LCPU interrupt
+//! - **MAILBOX2** (2 channels): LCPU writes ITR → triggers HCPU interrupt
 //!
-//! Physical MAILBOX peripherals on chip:
-//! - **MAILBOX1** @ 0x50082000 (HPSYS address space) - 4 channels
-//! - **MAILBOX2** @ 0x40002000 (LPSYS address space) - 2 channels
-//!
-//! Each CPU uses one for TX, listens to the other's IRQ for RX:
-//!
-//! - **HCPU usage**:
-//!   - TX: Write MAILBOX1.ITR → triggers LCPU interrupt
-//!   - RX: Handle MAILBOX2_CH1_IRQn → read LCPU shared memory
-//!     (HCPU doesn't need to access MAILBOX2 registers)
-//!
-//! - **LCPU usage**:
-//!   - TX: Write MAILBOX2.ITR → triggers HCPU interrupt
-//!   - RX: Handle MAILBOX1 interrupts → read HCPU shared memory
-//!
-//! ## Design: Channels as Fields
-//!
-//! Each mailbox exposes channels as struct fields for compile-time safety:
-//! - `Mailbox<MAILBOX1>` has 4 channels: `ch1`, `ch2`, `ch3`, `ch4`
-//! - `Mailbox<MAILBOX2>` has 2 channels: `ch1`, `ch2`
-//!
-//! This design provides:
-//! - **Compile-time safety**: Cannot access non-existent channels
-//! - **Zero-cost abstractions**: Channel ownership can be split across tasks
-//! - **Type-driven API**: Different mailbox instances have different field counts
+//! Each channel has 16 interrupt bits that can be triggered independently.
 //!
 //! ## Usage
 //!
 //! ```no_run
-//! use sifli_hal::{mailbox, peripherals};
+//! use sifli_hal::{bind_interrupts, mailbox};
 //!
-//! let p = /* get peripherals */;
-//! # unsafe { peripherals::Peripherals::steal() };
+//! bind_interrupts!(struct Irqs {
+//!     MAILBOX2_CH1 => mailbox::InterruptHandler<mailbox::Mailbox2Ch1>;
+//! });
 //!
-//! let mut mb = mailbox::Mailbox1::new(p.MAILBOX1);
-//!
-//! // Access channels as fields - compile-time safe!
-//! mb.ch1.trigger(0);  // Trigger interrupt bit 0 on channel 1
-//! mb.ch4.trigger(15); // Trigger interrupt bit 15 on channel 4
-//!
-//! // Use as mutex (all cores can access)
-//! match mb.ch1.try_lock() {
-//!     mailbox::LockCore::Unlocked => {
-//!         // Got the lock
-//!         // ... critical section ...
-//!         unsafe { mb.ch1.unlock() };
+//! async fn receive(mut ch: mailbox::Mailbox2Ch1<'static>) {
+//!     ch.enable_interrupt(0xFF);
+//!     loop {
+//!         let bits = ch.wait().await;
+//!         // Handle triggered bits...
 //!     }
-//!     core => defmt::info!("Locked by {:?}", core),
 //! }
-//!
-//! // Split ownership across tasks
-//! let (ch1, ch2, ch3, ch4) = mb.split();
-//! spawner.spawn(task1(ch1)).unwrap();
-//! spawner.spawn(task2(ch2)).unwrap();
 //! ```
 
-use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use core::future::poll_fn;
+use core::marker::PhantomData;
+use core::sync::atomic::{AtomicU16, Ordering};
+use core::task::Poll;
 
+use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
+use embassy_sync::waitqueue::AtomicWaker;
+
+use crate::interrupt;
 use crate::peripherals;
 
-/// Re-export LockCore enum from PAC
 pub use crate::pac::mailbox::vals::LockCore;
 
-/// Sealed trait to constrain mailbox peripheral types
-mod sealed {
-    pub trait SealedMailboxInstance {}
+// ============================================================================
+// Async state for MAILBOX2 channels
+// ============================================================================
+
+struct ChannelState {
+    waker: AtomicWaker,
+    pending_bits: AtomicU16,
 }
 
-/// Unified mailbox register block type (uses MAILBOX1 layout as common type)
-type Regs = crate::pac::mailbox::Mailbox1;
-
-/// Trait for mailbox peripheral instances
-///
-/// This trait is sealed and cannot be implemented outside this module.
-/// It provides a unified interface to access MAILBOX1 and MAILBOX2 registers
-/// via unsafe pointer conversion (embassy-stm32 style).
-#[allow(private_bounds)]
-pub trait MailboxInstance: sealed::SealedMailboxInstance + 'static {
-    /// Get the unified register block via unsafe pointer conversion
-    fn regs() -> Regs;
-}
-
-impl sealed::SealedMailboxInstance for peripherals::MAILBOX1 {}
-impl MailboxInstance for peripherals::MAILBOX1 {
-    #[inline]
-    fn regs() -> Regs {
-        unsafe { Regs::from_ptr(crate::pac::MAILBOX1.as_ptr()) }
-    }
-}
-
-impl sealed::SealedMailboxInstance for peripherals::MAILBOX2 {}
-impl MailboxInstance for peripherals::MAILBOX2 {
-    #[inline]
-    fn regs() -> Regs {
-        unsafe { Regs::from_ptr(crate::pac::MAILBOX2.as_ptr()) }
-    }
-}
-
-/// Mailbox channel with generic peripheral type
-///
-/// Generic over:
-/// - `T`: Mailbox peripheral type (MAILBOX1 or MAILBOX2)
-/// - `CH`: Channel index (compile-time constant)
-pub struct MailboxChannel<'d, T: MailboxInstance, const CH: usize> {
-    _phantom: core::marker::PhantomData<&'d mut T>,
-}
-
-impl<'d, T: MailboxInstance, const CH: usize> MailboxChannel<'d, T, CH> {
-    /// Create new channel (internal use only)
-    #[inline]
+impl ChannelState {
     const fn new() -> Self {
         Self {
-            _phantom: core::marker::PhantomData,
+            waker: AtomicWaker::new(),
+            pending_bits: AtomicU16::new(0),
         }
-    }
-
-    /// Enable interrupt reception (unmask)
-    ///
-    /// Allows receiving interrupts from remote core for this bit.
-    /// Must be called on the **receiving side** before remote can send interrupts.
-    ///
-    /// # Arguments
-    /// - `bit`: Interrupt bit 0-15
-    #[inline]
-    pub fn enable_interrupt(&mut self, bit: u8) {
-        assert!(bit < 16, "bit must be 0-15");
-        T::regs().ier(CH).modify(|w| w.set_int(bit as usize, true));
-    }
-
-    /// Disable interrupt reception (mask)
-    ///
-    /// Prevents receiving interrupts from remote core for this bit.
-    ///
-    /// # Arguments
-    /// - `bit`: Interrupt bit 0-15
-    #[inline]
-    pub fn disable_interrupt(&mut self, bit: u8) {
-        assert!(bit < 16, "bit must be 0-15");
-        T::regs().ier(CH).modify(|w| w.set_int(bit as usize, false));
-    }
-
-    /// Enable interrupt reception for multiple bits at once
-    ///
-    /// Unmasks all interrupt bits specified in the mask.
-    ///
-    /// # Arguments
-    /// - `mask`: Bitmask of interrupts to enable (bits 0-15)
-    ///
-    /// # Example
-    /// ```no_run
-    /// # let mut mb = todo!();
-    /// // Enable interrupts for bits 0, 1, and 2
-    /// mb.ch1.enable_interrupt_mask(0b0111);
-    /// ```
-    #[inline]
-    pub fn enable_interrupt_mask(&mut self, mask: u16) {
-        T::regs().ier(CH).modify(|w| w.0 |= mask as u32);
-    }
-
-    /// Disable interrupt reception for multiple bits at once
-    ///
-    /// Masks all interrupt bits specified in the mask.
-    ///
-    /// # Arguments
-    /// - `mask`: Bitmask of interrupts to disable (bits 0-15)
-    ///
-    /// # Example
-    /// ```no_run
-    /// # let mut mb = todo!();
-    /// // Disable interrupts for bits 0, 1, and 2
-    /// mb.ch1.disable_interrupt_mask(0b0111);
-    /// ```
-    #[inline]
-    pub fn disable_interrupt_mask(&mut self, mask: u16) {
-        T::regs().ier(CH).modify(|w| w.0 &= !(mask as u32));
-    }
-
-    /// Trigger interrupt on remote core
-    ///
-    /// # Arguments
-    /// - `bit`: Interrupt bit 0-15
-    #[inline]
-    pub fn trigger(&mut self, bit: u8) {
-        assert!(bit < 16, "bit must be 0-15");
-        T::regs().itr(CH).write(|w| w.set_int(bit as usize, true));
-    }
-
-    /// Trigger multiple bits at once
-    ///
-    /// # Arguments
-    /// - `mask`: Bitmask of interrupts to trigger (bits 0-15)
-    ///
-    /// # Example
-    /// ```no_run
-    /// # let mut mb = todo!();
-    /// // Trigger bits 0, 3, and 7 simultaneously
-    /// mb.ch1.trigger_mask(0b1000_1001);
-    /// ```
-    #[inline]
-    pub fn trigger_mask(&mut self, mask: u16) {
-        T::regs().itr(CH).write(|w| w.0 = mask as u32);
-    }
-
-    /// Clear interrupt flag
-    ///
-    /// Clears the specified interrupt bit in the ISR register.
-    /// This should be called in the interrupt handler after processing the interrupt.
-    ///
-    /// # Arguments
-    /// - `bit`: Interrupt bit 0-15 to clear
-    ///
-    /// # Example
-    /// ```no_run
-    /// # let mut mb = todo!();
-    /// // In interrupt handler
-    /// if mb.ch1.check_interrupt(5) {
-    ///     // Process interrupt bit 5
-    ///     // ...
-    ///     // Clear the flag
-    ///     mb.ch1.clear_interrupt(5);
-    /// }
-    /// ```
-    #[inline]
-    pub fn clear_interrupt(&mut self, bit: u8) {
-        assert!(bit < 16, "bit must be 0-15");
-        T::regs().icr(CH).write(|w| w.set_int(bit as usize, true));
-    }
-
-    /// Clear multiple interrupt flags at once
-    ///
-    /// Clears all interrupt bits specified in the mask.
-    ///
-    /// # Arguments
-    /// - `mask`: Bitmask of interrupts to clear (bits 0-15)
-    ///
-    /// # Example
-    /// ```no_run
-    /// # let mut mb = todo!();
-    /// // Clear bits 0, 3, and 7
-    /// mb.ch1.clear_interrupt_mask(0b1000_1001);
-    /// ```
-    #[inline]
-    pub fn clear_interrupt_mask(&mut self, mask: u16) {
-        T::regs().icr(CH).write(|w| w.0 = mask as u32);
-    }
-
-    /// Check if specific interrupt bit is triggered
-    ///
-    /// This is a convenience method that checks a single bit in the ISR register.
-    /// Equivalent to `(read_interrupt_status() & (1 << bit)) != 0`.
-    ///
-    /// # Arguments
-    /// - `bit`: Interrupt bit 0-15 to check
-    ///
-    /// # Returns
-    /// `true` if the interrupt bit is set, `false` otherwise
-    ///
-    /// # Example
-    /// ```no_run
-    /// # let mb = todo!();
-    /// if mb.ch1.check_interrupt(3) {
-    ///     // Interrupt bit 3 is triggered
-    /// }
-    /// ```
-    #[inline]
-    pub fn check_interrupt(&self, bit: u8) -> bool {
-        assert!(bit < 16, "bit must be 0-15");
-        T::regs().isr(CH).read().int(bit as usize)
-    }
-
-    /// Read raw interrupt status register (ISR)
-    ///
-    /// Returns the current state of all interrupt bits (0-15) regardless of masking.
-    /// Each set bit indicates that the corresponding interrupt was triggered.
-    ///
-    /// # Returns
-    /// Bitmask of triggered interrupts (bit 0-15)
-    ///
-    /// # Example
-    /// ```no_run
-    /// # let mb = todo!();
-    /// let status = mb.ch1.read_interrupt_status();
-    /// if status & 0x01 != 0 {
-    ///     // Interrupt bit 0 is triggered
-    /// }
-    /// ```
-    #[inline]
-    pub fn read_interrupt_status(&self) -> u16 {
-        T::regs().isr(CH).read().0 as u16
-    }
-
-    /// Read masked interrupt status register (MISR)
-    ///
-    /// Returns only the interrupts that are both triggered AND enabled.
-    /// This is equivalent to `ISR & IER`.
-    ///
-    /// # Returns
-    /// Bitmask of enabled and triggered interrupts (bit 0-15)
-    ///
-    /// # Example
-    /// ```no_run
-    /// # let mb = todo!();
-    /// // Only shows interrupts that are both triggered and unmasked
-    /// let masked_status = mb.ch1.read_masked_interrupt_status();
-    /// ```
-    #[inline]
-    pub fn read_masked_interrupt_status(&self) -> u16 {
-        T::regs().misr(CH).read().0 as u16
-    }
-
-    /// Try to acquire mutex lock
-    ///
-    /// Returns `Unlocked` if lock was acquired, otherwise returns current owner.
-    ///
-    /// # Hardware behavior
-    /// Reading the EXR register is an atomic operation:
-    /// - If unlocked: Sets the lock and returns `Unlocked`
-    /// - If locked: Returns the core ID that owns the lock
-    /// - Read-to-clear: When `EX = 1` is read, hardware clears it to `EX = 0` to claim the mutex
-    ///
-    /// # Example
-    /// ```no_run
-    /// # let mut mb = todo!();
-    /// match mb.ch1.try_lock() {
-    ///     LockCore::Unlocked => {
-    ///         // Lock acquired, enter critical section
-    ///         critical_work();
-    ///         unsafe { mb.ch1.unlock() };
-    ///     }
-    ///     LockCore::Hcpu => {
-    ///         // Locked by HCPU, retry later
-    ///     }
-    ///     _ => {}
-    /// }
-    /// ```
-    #[inline]
-    pub fn try_lock(&mut self) -> LockCore {
-        let exr = T::regs().exr(CH).read();
-
-        if exr.ex() {
-            LockCore::Unlocked
-        } else {
-            exr.id()
-        }
-    }
-
-    /// Unlock mutex
-    ///
-    /// # Safety
-    /// Caller must own the lock (i.e., `try_lock()` returned `Unlocked`)
-    #[inline]
-    pub unsafe fn unlock(&mut self) {
-        T::regs().exr(CH).write(|w| w.set_ex(true));
     }
 }
 
-/// MAILBOX1 driver (4 channels)
-pub struct Mailbox1<'d> {
-    _peri: PeripheralRef<'d, peripherals::MAILBOX1>,
-    /// Channel 1 (hardware channel 0)
-    pub ch1: MailboxChannel<'d, peripherals::MAILBOX1, 0>,
-    pub ch2: MailboxChannel<'d, peripherals::MAILBOX1, 1>,
-    pub ch3: MailboxChannel<'d, peripherals::MAILBOX1, 2>,
-    pub ch4: MailboxChannel<'d, peripherals::MAILBOX1, 3>,
-}
+static MAILBOX2_CH1_STATE: ChannelState = ChannelState::new();
+static MAILBOX2_CH2_STATE: ChannelState = ChannelState::new();
 
-impl<'d> Mailbox1<'d> {
-    /// Create new MAILBOX1 instance
-    ///
-    /// Enables the mailbox peripheral clock via RCC.
-    pub fn new(peri: impl Peripheral<P = peripherals::MAILBOX1> + 'd) -> Self {
-        into_ref!(peri);
-        crate::rcc::enable_and_reset::<peripherals::MAILBOX1>();
-        Self {
-            _peri: peri,
-            ch1: MailboxChannel::new(),
-            ch2: MailboxChannel::new(),
-            ch3: MailboxChannel::new(),
-            ch4: MailboxChannel::new(),
+// ============================================================================
+// Channel implementations via macro
+// ============================================================================
+
+macro_rules! impl_mailbox_channel {
+    // TX channel (MAILBOX1)
+    (tx: $name:ident, $peri:ident, $ch:expr) => {
+        /// MAILBOX1 TX channel (HCPU → LCPU)
+        pub struct $name<'d> {
+            _peri: PeripheralRef<'d, peripherals::$peri>,
         }
-    }
 
-    /// Split into individual channels for separate ownership
-    ///
-    /// This allows passing channels to different tasks or modules.
-    ///
-    /// # Example
-    /// ```no_run
-    /// # use embassy_executor::Spawner;
-    /// # async fn example(spawner: Spawner) {
-    /// let p = sifli_hal::init(Default::default());
-    /// let mb = sifli_hal::mailbox::Mailbox1::new(p.MAILBOX1);
-    ///
-    /// let (ch1, ch2, ch3, ch4) = mb.split();
-    ///
-    /// spawner.spawn(control_task(ch1)).unwrap();
-    /// spawner.spawn(data_task(ch2)).unwrap();
-    /// # }
-    /// ```
-    pub fn split(
-        self,
-    ) -> (
-        MailboxChannel<'d, peripherals::MAILBOX1, 0>,
-        MailboxChannel<'d, peripherals::MAILBOX1, 1>,
-        MailboxChannel<'d, peripherals::MAILBOX1, 2>,
-        MailboxChannel<'d, peripherals::MAILBOX1, 3>,
-    ) {
-        (self.ch1, self.ch2, self.ch3, self.ch4)
-    }
-}
+        impl<'d> $name<'d> {
+            /// Create new channel instance
+            pub fn new(peri: impl Peripheral<P = peripherals::$peri> + 'd) -> Self {
+                into_ref!(peri);
+                Self { _peri: peri }
+            }
 
-/// MAILBOX2 driver (2 channels)
-pub struct Mailbox2<'d> {
-    _peri: PeripheralRef<'d, peripherals::MAILBOX2>,
-    pub ch1: MailboxChannel<'d, peripherals::MAILBOX2, 0>,
-    pub ch2: MailboxChannel<'d, peripherals::MAILBOX2, 1>,
-}
+            /// Trigger interrupt on LCPU
+            #[inline]
+            pub fn trigger(&mut self, mask: u16) {
+                crate::pac::MAILBOX1
+                    .itr($ch - 1)
+                    .write(|w| w.0 = mask as u32);
+            }
 
-impl<'d> Mailbox2<'d> {
-    /// Create new MAILBOX2 instance
-    ///
-    /// Note: MAILBOX2 is in LPSYS and clock is managed by LPSYS_RCC, not HPSYS_RCC.
-    /// The clock should already be enabled by bootloader or LCPU firmware.
-    pub fn new(peri: impl Peripheral<P = peripherals::MAILBOX2> + 'd) -> Self {
-        into_ref!(peri);
-        // MAILBOX2 is in LPSYS, no HPSYS RCC control
-        Self {
-            _peri: peri,
-            ch1: MailboxChannel::new(),
-            ch2: MailboxChannel::new(),
+            /// Enable interrupt bits
+            #[inline]
+            pub fn enable_interrupt(&mut self, mask: u16) {
+                crate::pac::MAILBOX1
+                    .ier($ch - 1)
+                    .modify(|w| w.0 |= mask as u32);
+            }
+
+            /// Disable interrupt bits
+            #[inline]
+            pub fn disable_interrupt(&mut self, mask: u16) {
+                crate::pac::MAILBOX1
+                    .ier($ch - 1)
+                    .modify(|w| w.0 &= !(mask as u32));
+            }
+
+            /// Clear interrupt flags
+            #[inline]
+            pub fn clear_interrupt(&mut self, mask: u16) {
+                crate::pac::MAILBOX1
+                    .icr($ch - 1)
+                    .write(|w| w.0 = mask as u32);
+            }
+
+            /// Read raw interrupt status
+            #[inline]
+            pub fn status(&self) -> u16 {
+                crate::pac::MAILBOX1.isr($ch - 1).read().0 as u16
+            }
+
+            /// Read masked interrupt status (ISR & IER)
+            #[inline]
+            pub fn masked_status(&self) -> u16 {
+                crate::pac::MAILBOX1.misr($ch - 1).read().0 as u16
+            }
+
+            /// Try to acquire hardware mutex
+            #[inline]
+            pub fn try_lock(&mut self) -> Result<(), LockCore> {
+                let exr = crate::pac::MAILBOX1.exr($ch - 1).read();
+                if exr.ex() {
+                    Ok(())
+                } else {
+                    Err(exr.id())
+                }
+            }
+
+            /// Release hardware mutex
+            #[inline]
+            pub fn unlock(&mut self) {
+                crate::pac::MAILBOX1.exr($ch - 1).write(|w| w.set_ex(true));
+            }
         }
-    }
 
-    /// Split into individual channels for separate ownership
-    ///
-    /// This allows passing channels to different tasks or modules.
-    ///
-    /// # Example
-    /// ```no_run
-    /// # use embassy_executor::Spawner;
-    /// # async fn example(spawner: Spawner) {
-    /// let p = sifli_hal::init(Default::default());
-    /// let mb = sifli_hal::mailbox::Mailbox2::new(p.MAILBOX2);
-    ///
-    /// let (ch1, ch2) = mb.split();
-    ///
-    /// spawner.spawn(control_task(ch1)).unwrap();
-    /// spawner.spawn(data_task(ch2)).unwrap();
-    /// # }
-    /// ```
-    pub fn split(
-        self,
-    ) -> (
-        MailboxChannel<'d, peripherals::MAILBOX2, 0>,
-        MailboxChannel<'d, peripherals::MAILBOX2, 1>,
-    ) {
-        (self.ch1, self.ch2)
+        impl crate::mailbox::sealed::SealedTxChannel for peripherals::$peri {}
+        impl crate::mailbox::TxChannel for peripherals::$peri {}
+    };
+
+    // RX channel (MAILBOX2) with async support
+    (rx: $name:ident, $peri:ident, $ch:expr, $state:ident, $irq:ident) => {
+        /// MAILBOX2 RX channel (LCPU → HCPU)
+        pub struct $name<'d> {
+            _peri: PeripheralRef<'d, peripherals::$peri>,
+        }
+
+        impl<'d> $name<'d> {
+            /// Create new channel instance
+            pub fn new(peri: impl Peripheral<P = peripherals::$peri> + 'd) -> Self {
+                into_ref!(peri);
+                Self { _peri: peri }
+            }
+
+            /// Trigger interrupt (for testing, normally LCPU triggers this)
+            #[inline]
+            pub fn trigger(&mut self, mask: u16) {
+                crate::pac::MAILBOX2
+                    .itr($ch - 1)
+                    .write(|w| w.0 = mask as u32);
+            }
+
+            /// Enable interrupt bits
+            #[inline]
+            pub fn enable_interrupt(&mut self, mask: u16) {
+                crate::pac::MAILBOX2
+                    .ier($ch - 1)
+                    .modify(|w| w.0 |= mask as u32);
+            }
+
+            /// Disable interrupt bits
+            #[inline]
+            pub fn disable_interrupt(&mut self, mask: u16) {
+                crate::pac::MAILBOX2
+                    .ier($ch - 1)
+                    .modify(|w| w.0 &= !(mask as u32));
+            }
+
+            /// Clear interrupt flags
+            #[inline]
+            pub fn clear_interrupt(&mut self, mask: u16) {
+                crate::pac::MAILBOX2
+                    .icr($ch - 1)
+                    .write(|w| w.0 = mask as u32);
+            }
+
+            /// Read raw interrupt status
+            #[inline]
+            pub fn status(&self) -> u16 {
+                crate::pac::MAILBOX2.isr($ch - 1).read().0 as u16
+            }
+
+            /// Read masked interrupt status (ISR & IER)
+            #[inline]
+            pub fn masked_status(&self) -> u16 {
+                crate::pac::MAILBOX2.misr($ch - 1).read().0 as u16
+            }
+
+            /// Try to acquire hardware mutex
+            #[inline]
+            pub fn try_lock(&mut self) -> Result<(), LockCore> {
+                let exr = crate::pac::MAILBOX2.exr($ch - 1).read();
+                if exr.ex() {
+                    Ok(())
+                } else {
+                    Err(exr.id())
+                }
+            }
+
+            /// Release hardware mutex
+            #[inline]
+            pub fn unlock(&mut self) {
+                crate::pac::MAILBOX2.exr($ch - 1).write(|w| w.set_ex(true));
+            }
+
+            /// Wait for interrupt asynchronously
+            pub async fn wait(&mut self) -> u16 {
+                poll_fn(|cx| {
+                    $state.waker.register(cx.waker());
+                    let bits = $state.pending_bits.swap(0, Ordering::SeqCst);
+                    if bits != 0 {
+                        Poll::Ready(bits)
+                    } else {
+                        Poll::Pending
+                    }
+                })
+                .await
+            }
+        }
+
+        impl crate::mailbox::sealed::SealedRxChannel for $name<'_> {
+            type Interrupt = interrupt::typelevel::$irq;
+
+            fn on_interrupt() {
+                let regs = crate::pac::MAILBOX2;
+                let misr = regs.misr($ch - 1).read().0 as u16;
+                if misr == 0 {
+                    return;
+                }
+                regs.icr($ch - 1).write(|w| w.0 = misr as u32);
+                $state.pending_bits.fetch_or(misr, Ordering::SeqCst);
+                $state.waker.wake();
+            }
+        }
+        impl crate::mailbox::RxChannel for $name<'_> {}
+    };
+}
+
+// MAILBOX1 TX channels
+impl_mailbox_channel!(tx: Mailbox1Ch1, MAILBOX1_CH1, 1);
+impl_mailbox_channel!(tx: Mailbox1Ch2, MAILBOX1_CH2, 2);
+impl_mailbox_channel!(tx: Mailbox1Ch3, MAILBOX1_CH3, 3);
+impl_mailbox_channel!(tx: Mailbox1Ch4, MAILBOX1_CH4, 4);
+
+// MAILBOX2 RX channels
+impl_mailbox_channel!(rx: Mailbox2Ch1, MAILBOX2_CH1, 1, MAILBOX2_CH1_STATE, MAILBOX2_CH1);
+impl_mailbox_channel!(rx: Mailbox2Ch2, MAILBOX2_CH2, 2, MAILBOX2_CH2_STATE, MAILBOX2_CH2);
+
+// ============================================================================
+// Traits
+// ============================================================================
+
+mod sealed {
+    pub trait SealedTxChannel {}
+
+    pub trait SealedRxChannel {
+        type Interrupt: crate::interrupt::typelevel::Interrupt;
+        fn on_interrupt();
+    }
+}
+
+/// TX channel trait (MAILBOX1: HCPU → LCPU)
+#[allow(private_bounds)]
+pub trait TxChannel: sealed::SealedTxChannel {}
+
+/// RX channel trait (MAILBOX2: LCPU → HCPU)
+#[allow(private_bounds)]
+pub trait RxChannel: sealed::SealedRxChannel {}
+
+// ============================================================================
+// Interrupt handler
+// ============================================================================
+
+/// Interrupt handler for MAILBOX2 RX channels
+///
+/// # Example
+///
+/// ```no_run
+/// use sifli_hal::{bind_interrupts, mailbox};
+///
+/// bind_interrupts!(struct Irqs {
+///     MAILBOX2_CH1 => mailbox::InterruptHandler<mailbox::Mailbox2Ch1<'static>>;
+/// });
+/// ```
+pub struct InterruptHandler<C: RxChannel> {
+    _phantom: PhantomData<C>,
+}
+
+impl<C: RxChannel> interrupt::typelevel::Handler<C::Interrupt> for InterruptHandler<C> {
+    unsafe fn on_interrupt() {
+        C::on_interrupt();
     }
 }

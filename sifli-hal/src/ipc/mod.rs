@@ -1,22 +1,37 @@
 //! 核间 IPC Queue（MAILBOX doorbell + 共享内存环形缓冲）。
 //!
-//! 目标：在 HCPU Rust 侧复刻 SiFli SDK `ipc_queue` 的“线协议”（共享内存布局与环形缓冲算法），
+//! 目标：在 HCPU Rust 侧复刻 SiFli SDK `ipc_queue` 的"线协议"（共享内存布局与环形缓冲算法），
 //! 以便在无需给 LCPU 编程的前提下，与 ROM/固件侧保持一致行为。
+//!
+//! # 简化用法
+//!
+//! ```no_run
+//! use sifli_hal::{bind_interrupts, ipc};
+//!
+//! bind_interrupts!(struct Irqs {
+//!     MAILBOX2_CH1 => ipc::InterruptHandler;
+//! });
+//!
+//! let p = sifli_hal::init(Default::default());
+//! let rev = sifli_hal::syscfg::read_idr().revision();
+//! let mut ipc = ipc::Ipc::new(p.MAILBOX1_CH1, ipc::Config::default());
+//! let mut q = ipc.open_queue(ipc::QueueConfig::qid0_hci(rev)).unwrap();
+//! ```
 
 mod circular_buf;
 
 use core::future::poll_fn;
+use core::marker::PhantomData;
 use core::mem;
 use core::ptr;
 use core::sync::atomic::{fence, AtomicBool, AtomicUsize, Ordering};
 use core::task::Poll;
 
+use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 
-use crate::interrupt::typelevel::Binding;
 use crate::interrupt::{self, InterruptExt};
 use crate::lcpu::ram::IpcRegion;
-use crate::mailbox::{MailboxChannel, MailboxInstance};
 use crate::{peripherals, rcc, syscfg};
 
 use circular_buf::{CircularBuf, CircularBufMutPtrExt, CircularBufPtrExt};
@@ -130,37 +145,49 @@ impl Drop for LcpuActiveGuard {
     }
 }
 
-/// MAILBOX2_CH1 IRQ handler（HCPU 收到 LCPU doorbell）。
-pub struct InterruptHandler;
+// ============================================================================
+// Interrupt handler
+// ============================================================================
+
+/// IPC 中断处理器
+///
+/// 直接在中断中处理 MAILBOX2_CH1 中断并唤醒对应的 IPC queue，
+/// 无需 spawn 单独的 task。
+///
+/// # Example
+///
+/// ```no_run
+/// use sifli_hal::{bind_interrupts, ipc};
+///
+/// bind_interrupts!(struct Irqs {
+///     MAILBOX2_CH1 => ipc::InterruptHandler;
+/// });
+/// ```
+pub struct InterruptHandler {
+    _phantom: PhantomData<()>,
+}
 
 impl interrupt::typelevel::Handler<interrupt::typelevel::MAILBOX2_CH1> for InterruptHandler {
     unsafe fn on_interrupt() {
-        on_mailbox2_ch1_irq()
-    }
-}
+        let regs = crate::pac::MAILBOX2;
 
-#[inline]
-unsafe fn on_mailbox2_ch1_irq() {
-    let regs = <peripherals::MAILBOX2 as MailboxInstance>::regs();
-
-    // SDK: status = mailbox->CxMISR; mailbox->CxICR = status;
-    let status = regs.misr(0).read().0 as u16;
-    if status == 0 {
-        return;
-    }
-    debug!("IPC irq: misr=0x{:04X}", status);
-    regs.icr(0).write(|w| w.0 = status as u32);
-
-    fence(Ordering::SeqCst);
-
-    let mut bits = status;
-    let mut qid = 0usize;
-    while bits != 0 {
-        if (bits & 1) != 0 && qid < HW_QUEUE_NUM {
-            handle_rx_irq(qid as u8);
+        // 读取 masked interrupt status
+        let misr = regs.misr(0).read().0 as u16;
+        if misr == 0 {
+            return;
         }
-        bits >>= 1;
-        qid += 1;
+
+        // 清除中断
+        regs.icr(0).write(|w| w.0 = misr as u32);
+
+        fence(Ordering::SeqCst);
+
+        // 遍历触发的 bit，唤醒对应 queue
+        for qid in 0..HW_QUEUE_NUM {
+            if misr & (1 << qid) != 0 {
+                handle_rx_irq(qid as u8);
+            }
+        }
     }
 }
 
@@ -178,37 +205,54 @@ fn handle_rx_irq(qid: u8) {
         unsafe { (rx_ptr as *const CircularBuf).data_len() }
     };
 
-    debug!("IPC irq: qid={} rx_len={}", qid, len);
     st.rx_len.store(len, Ordering::Release);
     st.rx_waker.wake();
 }
 
+// ============================================================================
+// IPC driver
+// ============================================================================
+
 /// IPC（HCPU 侧）初始化与队列打开。
+///
+/// # Example
+///
+/// ```no_run
+/// use sifli_hal::{bind_interrupts, ipc};
+///
+/// bind_interrupts!(struct Irqs {
+///     MAILBOX2_CH1 => ipc::InterruptHandler;
+/// });
+///
+/// let p = sifli_hal::init(Default::default());
+/// let rev = sifli_hal::syscfg::read_idr().revision();
+/// let mut ipc = ipc::Ipc::new(p.MAILBOX1_CH1, ipc::Config::default());
+/// let mut q = ipc.open_queue(ipc::QueueConfig::qid0_hci(rev)).unwrap();
+/// ```
 pub struct Ipc<'d> {
-    tx_ch1: MailboxChannel<'d, peripherals::MAILBOX1, 0>,
-    rx_ch1: MailboxChannel<'d, peripherals::MAILBOX2, 0>,
+    _tx_ch: PeripheralRef<'d, peripherals::MAILBOX1_CH1>,
 }
 
 impl<'d> Ipc<'d> {
+    /// Create a new IPC instance
     pub fn new(
-        tx_ch1: MailboxChannel<'d, peripherals::MAILBOX1, 0>,
-        rx_ch1: MailboxChannel<'d, peripherals::MAILBOX2, 0>,
-        _irq: impl Binding<interrupt::typelevel::MAILBOX2_CH1, InterruptHandler> + 'd,
+        tx_ch: impl Peripheral<P = peripherals::MAILBOX1_CH1> + 'd,
         config: Config,
     ) -> Self {
+        into_ref!(tx_ch);
+
         // MAILBOX1 在 HPSYS，需要打开 RCC（不 reset，避免影响其它 channel 的配置）。
         rcc::enable::<peripherals::MAILBOX1>();
 
-        // 使能 HCPU 侧中断（对应 SDK 的 LCPU2HCPU_IRQn=58 => MAILBOX2_CH1）。
+        // 配置 MAILBOX2_CH1 中断优先级
         let irq = crate::interrupt::MAILBOX2_CH1;
         unsafe {
-            irq.disable();
             irq.set_priority(config.irq_priority);
             irq.unpend();
             irq.enable();
         }
 
-        Self { tx_ch1, rx_ch1 }
+        Self { _tx_ch: tx_ch }
     }
 
     /// 打开一个 IPC Queue（等价于 SDK 的 init+open 的最小子集）。
@@ -259,12 +303,16 @@ impl<'d> Ipc<'d> {
             );
 
             // Unmask：按 SDK 语义，在 tx mailbox 上放开 qid；同时也放开 rx 侧，降低丢中断风险。
-            self.tx_ch1.enable_interrupt(cfg.qid);
+            let qid_mask = 1u16 << cfg.qid;
+            // 直接操作 MAILBOX1 寄存器
+            crate::pac::MAILBOX1.ier(0).modify(|w| w.0 |= qid_mask as u32);
             {
                 // 访问 MAILBOX2（L2H_MAILBOX）前确保 LPSYS 处于 active。
                 let _lcpu_active = LcpuActiveGuard::new();
-                self.rx_ch1.enable_interrupt(cfg.qid);
-                self.rx_ch1.clear_interrupt(cfg.qid);
+                // 直接操作 MAILBOX2 寄存器（寄存器操作是原子的）
+                let mb2 = crate::pac::MAILBOX2;
+                mb2.ier(0).modify(|w| w.0 |= qid_mask as u32);
+                mb2.icr(0).write(|w| w.0 = qid_mask as u32);
             }
 
             Ok(IpcQueue { qid: cfg.qid })
@@ -373,8 +421,8 @@ impl IpcQueue {
         let n = unsafe { cb.put(data) };
         if n > 0 {
             fence(Ordering::SeqCst);
-            let regs_tx = <peripherals::MAILBOX1 as MailboxInstance>::regs();
-            regs_tx.itr(0).write(|w| w.set_int(self.qid as usize, true));
+            // 触发 MAILBOX1 中断（寄存器写入是原子的）
+            crate::pac::MAILBOX1.itr(0).write(|w| w.0 = 1u32 << self.qid);
         }
         Ok(n)
     }
@@ -422,8 +470,9 @@ impl IpcQueue {
             }
         };
 
-        let mb1 = <peripherals::MAILBOX1 as MailboxInstance>::regs();
-        let mb2 = <peripherals::MAILBOX2 as MailboxInstance>::regs();
+        // 直接读取 mailbox 寄存器（只读操作）
+        let mb1 = crate::pac::MAILBOX1;
+        let mb2 = crate::pac::MAILBOX2;
         let mb1_ier = mb1.ier(0).read().0 as u16;
         let mb1_isr = mb1.isr(0).read().0 as u16;
         let mb1_misr = mb1.misr(0).read().0 as u16;

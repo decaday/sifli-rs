@@ -99,6 +99,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dma_content = fs::read_to_string(&dma_path)?;
     let dma: build_serde::Dma = serde_yaml::from_str(&dma_content)
         .map_err(|e| format!("Failed to parse dma.yaml: {}", e))?;
+
+    // Read and parse mailbox.yaml
+    let mailbox_path = data_dir.join("mailbox.yaml");
+    let mailbox_content = fs::read_to_string(&mailbox_path)?;
+    let mailbox: build_serde::Mailbox = serde_yaml::from_str(&mailbox_content)
+        .map_err(|e| format!("Failed to parse mailbox.yaml: {}", e))?;
     
     // Get output path from env
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
@@ -117,7 +123,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     token_stream.extend(interrupt_mod);
 
     // Generate peripherals singleton
-    let peripherals_singleton = generate_peripherals_singleton(&peripherals, &dma.hcpu);
+    let peripherals_singleton = generate_peripherals_singleton(&peripherals, &dma.hcpu, &mailbox);
     token_stream.extend(peripherals_singleton);
 
     // Generate rcc implementations
@@ -431,7 +437,11 @@ fn generate_interrupt_mod(interrupts: &Interrupts) -> TokenStream {
     }
 }
 
-fn generate_peripherals_singleton(peripherals: &Peripherals, dma: &build_serde::DmaHcpu) -> TokenStream {
+fn generate_peripherals_singleton(
+    peripherals: &Peripherals,
+    dma: &build_serde::DmaHcpu,
+    mailbox: &build_serde::Mailbox,
+) -> TokenStream {
     let peripheral_names: Vec<_> = peripherals.hcpu
         .iter()
         .map(|p| {
@@ -439,7 +449,7 @@ fn generate_peripherals_singleton(peripherals: &Peripherals, dma: &build_serde::
             quote::format_ident!("{}", name)
         })
         .collect();
-    
+
     // TODO: move pin num to chip info
     let gpio_pins: Vec<_> = (0..=44)
         .map(|i| {
@@ -447,7 +457,7 @@ fn generate_peripherals_singleton(peripherals: &Peripherals, dma: &build_serde::
             quote::format_ident!("{}", pin_name)
         })
         .collect();
-    
+
     // Iterate over all DMA controllers (e.g., DMAC1, DMAC2) found in the yaml.
     let dmac_channels: Vec<_> = dma.controllers.iter().flat_map(|(name, controller)| {
         (1..=controller.channel_total).map(move |i| {
@@ -456,12 +466,22 @@ fn generate_peripherals_singleton(peripherals: &Peripherals, dma: &build_serde::
             quote::format_ident!("{}", channel_name)
         })
     }).collect();
-    
+
+    // Iterate over all Mailbox peripherals (e.g., MAILBOX1, MAILBOX2) found in the yaml.
+    let mailbox_channels: Vec<_> = mailbox.iter().flat_map(|(name, config)| {
+        (1..=config.channel_total).map(move |i| {
+            // Generate singletons like `MAILBOX1_CH1`, `MAILBOX2_CH1`...
+            let channel_name = format!("{}_CH{}", name, i);
+            quote::format_ident!("{}", channel_name)
+        })
+    }).collect();
+
     quote! {
         embassy_hal_internal::peripherals! {
             #(#peripheral_names,)*
             #(#gpio_pins,)*
             #(#dmac_channels,)*
+            #(#mailbox_channels,)*
         }
     }
 }

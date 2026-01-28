@@ -104,6 +104,16 @@ pub struct DmaRequest {
     pub used: bool,
 }
 
+// ---------- mailbox.yaml ----------
+
+/// Mailbox configuration: maps peripheral name (e.g., "MAILBOX1") to its config.
+pub type Mailbox = BTreeMap<String, MailboxConfig>;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MailboxConfig {
+    pub channel_total: u8,
+}
+
 // ---------- HPSYS_xxx.yaml ----------
 
 // Some code in this file is copied from [chiptool](https://github.com/embassy-rs/chiptool/blob/main/src/ir.rs)

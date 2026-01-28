@@ -10,7 +10,7 @@ use panic_probe as _;
 use sifli_hal::{
     bind_interrupts, ipc,
     lcpu::{Lcpu, LcpuConfig},
-    mailbox, syscfg,
+    syscfg,
 };
 
 bind_interrupts!(struct Irqs {
@@ -21,11 +21,8 @@ bind_interrupts!(struct Irqs {
 async fn main(_spawner: Spawner) {
     let p = sifli_hal::init(Default::default());
     let rev = syscfg::read_idr().revision();
-    let mb1 = mailbox::Mailbox1::new(p.MAILBOX1);
-    let mb2 = mailbox::Mailbox2::new(p.MAILBOX2);
-    let (mb1_ch1, _mb1_ch2, _mb1_ch3, _mb1_ch4) = mb1.split();
-    let (mb2_ch1, _mb2_ch2) = mb2.split();
-    let mut ipc = ipc::Ipc::new(mb1_ch1, mb2_ch1, Irqs, ipc::Config::default());
+
+    let mut ipc = ipc::Ipc::new(p.MAILBOX1_CH1, ipc::Config::default());
 
     let mut q = match ipc.open_queue(ipc::QueueConfig::qid0_hci(rev)) {
         Ok(q) => q,
