@@ -36,6 +36,8 @@ pub mod lcpu;
 pub mod lpaon;
 #[cfg(feature = "_time-driver")]
 pub mod time_driver;
+#[cfg(feature = "bt-hci")]
+pub mod bt_hci;
 
 // Reexports
 pub use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
