@@ -209,8 +209,6 @@ impl<'d> Lcpu<'d> {
 impl<'d> Lcpu<'d> {
     /// 阻塞版 LCPU 启动流程。
     pub fn power_on(&self, config: &LcpuConfig) -> Result<(), LcpuError> {
-        info!("Starting LCPU power-on sequence");
-
         // 1. Wake LCPU。
         debug!("Step 1: Waking up LCPU");
         unsafe {
@@ -268,8 +266,6 @@ impl<'d> Lcpu<'d> {
         unsafe {
             rcc::cancel_lcpu_active_request();
         }
-
-        info!("LCPU power-on sequence completed successfully");
 
         Ok(())
     }

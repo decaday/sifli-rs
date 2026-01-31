@@ -35,6 +35,8 @@ async fn main(_spawner: Spawner) {
     }
 
     info!("LCPU is running; blinking LED");
+    // LCPU会发送一个HCI事件，如果没有被消费，500ms超时后会自己消费
+    // LCPU此时不再被阻塞，power_on()最后一步的允许lp休眠生效
 
     loop {
         led.toggle();

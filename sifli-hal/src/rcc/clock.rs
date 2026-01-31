@@ -902,9 +902,9 @@ pub unsafe fn wake_lcpu() {
     HPSYS_AON.issr().modify(|w| w.set_hp2lp_req(true));
 
     // Wait for LCPU to see the request and respond
-    cortex_m::asm::delay(48 * 230); // 230us @ 48MHz
+    crate::cortex_m_blocking_delay_us(230);
     while !HPSYS_AON.issr().read().lp_active() {}
-    cortex_m::asm::delay(48 * 30); // 30us @ 48MHz
+    crate::cortex_m_blocking_delay_us(30);
     while !HPSYS_AON.issr().read().lp_active() {}
 
     // Increment reference counter
