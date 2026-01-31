@@ -1,9 +1,50 @@
 //! 核间 IPC Queue（MAILBOX doorbell + 共享内存环形缓冲）。
 //!
-//! 目标：在 HCPU Rust 侧复刻 SiFli SDK `ipc_queue` 的"线协议"（共享内存布局与环形缓冲算法），
-//! 以便在无需给 LCPU 编程的前提下，与 ROM/固件侧保持一致行为。
+//! 在 HCPU Rust 侧复刻 SiFli SDK `ipc_queue` 的线协议，与 LCPU ROM/固件保持兼容。
 //!
-//! # 简化用法
+//! # 架构说明
+//!
+//! IPC 机制由两部分组成：**中断通知**（doorbell）和**共享内存**（环形缓冲区）。
+//!
+//! ## 1. 中断通知（MAILBOX 硬件）
+//!
+//! SF32LB52x 有两个 MAILBOX 外设：
+//! - **MAILBOX1**（4 个通道 C1-C4）：HCPU 写 → 触发 LCPU 中断
+//! - **MAILBOX2**（2 个通道 C1-C2）：LCPU 写 → 触发 HCPU 中断
+//!
+//! **IPC queue 只使用 MAILBOX1_C1 和 MAILBOX2_C1**，每个通道的中断寄存器有 16 个独立的位，
+//! IPC 用其中 bit 0-7 对应 qid 0-7。当需要通知对方时，写 ITR 寄存器的对应位触发中断。
+//!
+//! ```text
+//! MAILBOX1_C1.IER/ITR/ISR:  [bit15 ... bit8 | bit7(qid7) ... bit1(qid1) bit0(qid0)]
+//! MAILBOX2_C1.IER/ITR/ISR:  [bit15 ... bit8 | bit7(qid7) ... bit1(qid1) bit0(qid0)]
+//! ```
+//!
+//! **MAILBOX1_C2/C3/C4 和 MAILBOX2_C2 在 IPC queue 机制中未使用。**
+//!
+//! ## 2. 共享内存（SRAM 缓冲区）
+//!
+//! 数据通过 SRAM 中的环形缓冲区传输。SDK 预分配了两组缓冲区（每组 512 字节）：
+//!
+//! | 缓冲区名称 | HCPU 地址 | 用途 |
+//! |-----------|----------|------|
+//! | HCPU2LCPU_BUF1 | 0x2007FE00 | qid0 (HCI) 的 TX |
+//! | HCPU2LCPU_BUF2 | 0x2007FC00 | qid1-7 的 TX |
+//! | LCPU2HCPU_BUF1 | 0x20405C00 | qid0 (HCI) 的 RX |
+//! | LCPU2HCPU_BUF2 | 0x20405E00 | qid1-7 的 RX |
+//!
+//! 注意：缓冲区名称中的 "BUF1/BUF2" 与 MAILBOX 的物理通道 C1/C2 **没有对应关系**。
+//!
+//! ## 3. SDK qid 分配（sf32lb52x）
+//!
+//! | qid | 缓冲区 | 用途 |
+//! |-----|--------|------|
+//! | 0 | BUF1 | HCI（蓝牙 controller 通信）|
+//! | 1 | BUF2 | 系统 IPC（data service 等）|
+//! | 6 | BUF2 | 蓝牙音频 |
+//! | 7 | BUF2 | 调试/日志 |
+//!
+//! # 用法示例
 //!
 //! ```no_run
 //! use sifli_hal::{bind_interrupts, ipc};
@@ -14,7 +55,7 @@
 //!
 //! let p = sifli_hal::init(Default::default());
 //! let rev = sifli_hal::syscfg::read_idr().revision();
-//! let mut ipc = ipc::Ipc::new(p.MAILBOX1_CH1, ipc::Config::default());
+//! let mut ipc = ipc::Ipc::new(p.MAILBOX1_CH1, Irqs, ipc::Config::default());
 //! let mut q = ipc.open_queue(ipc::QueueConfig::qid0_hci(rev)).unwrap();
 //! ```
 
@@ -23,7 +64,6 @@ mod circular_buf;
 use core::future::poll_fn;
 use core::marker::PhantomData;
 use core::mem;
-use core::ptr;
 use core::sync::atomic::{fence, AtomicBool, AtomicUsize, Ordering};
 use core::task::Poll;
 
@@ -49,6 +89,31 @@ pub enum Error {
     NotOpen,
     TxUnavailable,
     RxUnavailable,
+}
+
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::InvalidQid => write!(f, "invalid queue ID"),
+            Error::AlreadyOpen => write!(f, "queue already open"),
+            Error::BufferTooSmall => write!(f, "buffer too small"),
+            Error::NotOpen => write!(f, "queue not open"),
+            Error::TxUnavailable => write!(f, "TX unavailable"),
+            Error::RxUnavailable => write!(f, "RX unavailable"),
+        }
+    }
+}
+
+impl core::error::Error for Error {}
+
+impl embedded_io::Error for Error {
+    fn kind(&self) -> embedded_io::ErrorKind {
+        match self {
+            Error::NotOpen | Error::AlreadyOpen => embedded_io::ErrorKind::NotConnected,
+            Error::InvalidQid | Error::BufferTooSmall => embedded_io::ErrorKind::InvalidInput,
+            Error::TxUnavailable | Error::RxUnavailable => embedded_io::ErrorKind::Other,
+        }
+    }
 }
 
 /// IPC 初始化配置。
@@ -77,7 +142,7 @@ pub struct QueueConfig {
 }
 
 impl QueueConfig {
-    /// qid0（SDK 蓝牙/HCI 通道，默认使用 MB_CH1 buffer）。
+    /// qid0：SDK 蓝牙 HCI 通道，使用 BUF1 缓冲区。
     pub fn qid0_hci(rev: syscfg::ChipRevision) -> Self {
         let tx = IpcRegion::HCPU_TO_LCPU_CH1;
         Self {
@@ -89,7 +154,7 @@ impl QueueConfig {
         }
     }
 
-    /// qid1（SDK system/data-service 常用，默认使用 MB_CH2 buffer）。
+    /// qid1：SDK 系统 IPC 通道（data-service 等），使用 BUF2 缓冲区。
     pub fn qid1_system(rev: syscfg::ChipRevision) -> Self {
         let tx = IpcRegion::HCPU_TO_LCPU_CH2;
         Self {
@@ -123,27 +188,6 @@ impl QueueState {
 }
 
 static QUEUES: [QueueState; HW_QUEUE_NUM] = [const { QueueState::new() }; HW_QUEUE_NUM];
-
-/// 在访问 LPSYS 域资源（如 `MAILBOX2` 寄存器、LPSYS SRAM）前，临时请求 LCPU 保持 active。
-///
-/// SDK `ipc_hw_enable_interrupt2()` 在 HCPU 侧会 `HAL_HPAON_WakeCore(LCPU)`，避免在 LPSYS 休眠时访问
-/// mailbox 寄存器导致行为未定义/触发 fault。
-struct LcpuActiveGuard;
-
-impl LcpuActiveGuard {
-    #[inline]
-    fn new() -> Self {
-        unsafe { rcc::wake_lcpu() };
-        Self
-    }
-}
-
-impl Drop for LcpuActiveGuard {
-    #[inline]
-    fn drop(&mut self) {
-        unsafe { rcc::cancel_lcpu_active_request() };
-    }
-}
 
 // ============================================================================
 // Interrupt handler
@@ -226,7 +270,7 @@ fn handle_rx_irq(qid: u8) {
 ///
 /// let p = sifli_hal::init(Default::default());
 /// let rev = sifli_hal::syscfg::read_idr().revision();
-/// let mut ipc = ipc::Ipc::new(p.MAILBOX1_CH1, ipc::Config::default());
+/// let mut ipc = ipc::Ipc::new(p.MAILBOX1_CH1, Irqs, ipc::Config::default());
 /// let mut q = ipc.open_queue(ipc::QueueConfig::qid0_hci(rev)).unwrap();
 /// ```
 pub struct Ipc<'d> {
@@ -237,6 +281,7 @@ impl<'d> Ipc<'d> {
     /// Create a new IPC instance
     pub fn new(
         tx_ch: impl Peripheral<P = peripherals::MAILBOX1_CH1> + 'd,
+        _irq: impl interrupt::typelevel::Binding<interrupt::typelevel::MAILBOX2_CH1, InterruptHandler>,
         config: Config,
     ) -> Self {
         into_ref!(tx_ch);
@@ -278,8 +323,7 @@ impl<'d> Ipc<'d> {
             if cfg.tx_buf_addr != 0 {
                 unsafe {
                     let cb = cfg.tx_buf_addr as *mut CircularBuf;
-                    let pool_wr =
-                        (cfg.tx_buf_addr as *mut u8).add(mem::size_of::<CircularBuf>());
+                    let pool_wr = (cfg.tx_buf_addr as *mut u8).add(mem::size_of::<CircularBuf>());
                     cb.wr_init(
                         pool_wr,
                         (cfg.tx_buf_size - mem::size_of::<CircularBuf>()) as i16,
@@ -305,33 +349,119 @@ impl<'d> Ipc<'d> {
             // Unmask：按 SDK 语义，在 tx mailbox 上放开 qid；同时也放开 rx 侧，降低丢中断风险。
             let qid_mask = 1u16 << cfg.qid;
             // 直接操作 MAILBOX1 寄存器
-            crate::pac::MAILBOX1.ier(0).modify(|w| w.0 |= qid_mask as u32);
+            crate::pac::MAILBOX1
+                .ier(0)
+                .modify(|w| w.0 |= qid_mask as u32);
             {
-                // 访问 MAILBOX2（L2H_MAILBOX）前确保 LPSYS 处于 active。
-                let _lcpu_active = LcpuActiveGuard::new();
-                // 直接操作 MAILBOX2 寄存器（寄存器操作是原子的）
                 let mb2 = crate::pac::MAILBOX2;
                 mb2.ier(0).modify(|w| w.0 |= qid_mask as u32);
                 mb2.icr(0).write(|w| w.0 = qid_mask as u32);
             }
 
-            Ok(IpcQueue { qid: cfg.qid })
+            Ok(IpcQueue {
+                rx: IpcQueueRx { qid: cfg.qid },
+                tx: IpcQueueTx { qid: cfg.qid },
+            })
         })
     }
 }
 
 /// 已打开的 IPC Queue 句柄。
 pub struct IpcQueue {
+    rx: IpcQueueRx,
+    tx: IpcQueueTx,
+}
+
+/// IPC Queue 的接收端（RX）。
+///
+/// 通过 [`IpcQueue::split()`] 获取，可独立于 TX 端进行读取操作。
+pub struct IpcQueueRx {
+    qid: u8,
+}
+
+/// IPC Queue 的发送端（TX）。
+///
+/// 通过 [`IpcQueue::split()`] 获取，可独立于 RX 端进行写入操作。
+pub struct IpcQueueTx {
     qid: u8,
 }
 
 impl IpcQueue {
+    /// 返回队列 ID。
+    #[inline]
+    pub fn qid(&self) -> u8 {
+        self.rx.qid
+    }
+
+    /// 将 IpcQueue 拆分为独立的 RX 和 TX 端。
+    ///
+    /// 拆分后，RX 和 TX 可以在不同的任务中并发使用，不会互相阻塞。
+    /// 这对于需要同时进行读写操作的场景（如 HCI 通信）非常有用。
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// let queue = ipc.open_queue(cfg)?;
+    /// let (rx, tx) = queue.split();
+    /// // rx 和 tx 可以在不同任务中使用
+    /// ```
+    pub fn split(self) -> (IpcQueueRx, IpcQueueTx) {
+        (self.rx, self.tx)
+    }
+
+    /// 当前 rx buffer 中可读字节数（由中断更新，必要时可再读一次共享 ring buffer 自校准）。
+    #[inline]
+    pub fn rx_available(&self) -> Result<usize, Error> {
+        self.rx.rx_available()
+    }
+
+    /// 读数据（非阻塞）。无数据时返回 `Ok(0)`。
+    #[inline]
+    pub fn read(&mut self, out: &mut [u8]) -> Result<usize, Error> {
+        self.rx.read(out)
+    }
+
+    /// 等待直到 rx 有数据。
+    #[inline]
+    pub async fn wait_readable(&mut self) -> Result<(), Error> {
+        self.rx.wait_readable().await
+    }
+
+    /// 异步读（至少读到 1 字节，除非发生错误）。
+    #[inline]
+    pub async fn read_async(&mut self, out: &mut [u8]) -> Result<usize, Error> {
+        self.rx.read_async(out).await
+    }
+
+    /// 写数据到 tx ring buffer。
+    ///
+    /// 与 SDK 一致：该接口不保证线程安全（避免多个线程并发写同一队列）。
+    #[inline]
+    pub fn write(&mut self, data: &[u8]) -> Result<usize, Error> {
+        self.tx.write(data)
+    }
+
+    /// 触发 doorbell 通知对端有数据可读。
+    ///
+    /// 调用 `write` 后需要调用 `flush` 才能通知 LCPU。
+    /// 这样设计是为了支持多次 write 后只触发一次 doorbell，避免 LCPU 收到不完整的包。
+    #[inline]
+    pub fn flush(&mut self) -> Result<(), Error> {
+        self.tx.flush()
+    }
+}
+
+// ============================================================================
+// IpcQueueRx implementation
+// ============================================================================
+
+impl IpcQueueRx {
     #[inline]
     pub fn qid(&self) -> u8 {
         self.qid
     }
 
-    /// 当前 rx buffer 中可读字节数（由中断更新，必要时可再读一次共享 ring buffer 自校准）。
+    /// 当前 rx buffer 中可读字节数。
     pub fn rx_available(&self) -> Result<usize, Error> {
         let st = &QUEUES[self.qid as usize];
         if !st.active.load(Ordering::Acquire) {
@@ -368,8 +498,10 @@ impl IpcQueue {
         let n = critical_section::with(|_| {
             fence(Ordering::SeqCst);
             let n = unsafe { cb.get(out) };
-            st.rx_len
-                .store(unsafe { (cb as *const CircularBuf).data_len() }, Ordering::Release);
+            st.rx_len.store(
+                unsafe { (cb as *const CircularBuf).data_len() },
+                Ordering::Release,
+            );
             n
         });
         Ok(n)
@@ -402,8 +534,30 @@ impl IpcQueue {
         self.wait_readable().await?;
         self.read(out)
     }
+}
 
-    /// 写数据到 tx ring buffer，并触发 doorbell。
+impl embedded_io_async::ErrorType for IpcQueueRx {
+    type Error = Error;
+}
+
+impl embedded_io_async::Read for IpcQueueRx {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.wait_readable().await?;
+        IpcQueueRx::read(self, buf)
+    }
+}
+
+// ============================================================================
+// IpcQueueTx implementation
+// ============================================================================
+
+impl IpcQueueTx {
+    #[inline]
+    pub fn qid(&self) -> u8 {
+        self.qid
+    }
+
+    /// 写数据到 tx ring buffer。
     ///
     /// 与 SDK 一致：该接口不保证线程安全（避免多个线程并发写同一队列）。
     pub fn write(&mut self, data: &[u8]) -> Result<usize, Error> {
@@ -419,91 +573,65 @@ impl IpcQueue {
 
         let cb = tx_ptr as *mut CircularBuf;
         let n = unsafe { cb.put(data) };
-        if n > 0 {
-            fence(Ordering::SeqCst);
-            // 触发 MAILBOX1 中断（寄存器写入是原子的）
-            crate::pac::MAILBOX1.itr(0).write(|w| w.0 = 1u32 << self.qid);
-        }
         Ok(n)
     }
 
-    /// 输出当前队列/MAILBOX/环形缓冲的关键信息（用于定位“是否送达/是否被消费/是否有回包”）。
+    /// 触发 doorbell 通知对端有数据可读。
     ///
-    /// 只做 volatile 读取，不会去解引用 pool 指针，避免在对端未初始化时触发 fault。
-    pub fn debug_dump(&self) {
-        // debug_dump 会读取 MAILBOX2/LPSYS ring buffer，必须先确保 LPSYS 处于 active，
-        // 否则在某些低功耗状态下会直接 HardFault（SDK 文档也说明这类访问“行为未定义”）。
-        let _lcpu_active = LcpuActiveGuard::new();
-
+    /// 调用 `write` 后需要调用 `flush` 才能通知 LCPU。
+    pub fn flush(&mut self) -> Result<(), Error> {
         let st = &QUEUES[self.qid as usize];
-        let rx_ptr = st.rx_buf.load(Ordering::Acquire);
-        let tx_ptr = st.tx_buf.load(Ordering::Acquire);
-        let rx_len_cached = st.rx_len.load(Ordering::Acquire);
+        if !st.active.load(Ordering::Acquire) {
+            return Err(Error::NotOpen);
+        }
 
-        let (tx_raw_size, tx_rd, tx_wr, tx_rd_buf, tx_wr_buf, tx_data_len) = if tx_ptr == 0 {
-            (0i16, 0u32, 0u32, 0u32, 0u32, 0usize)
-        } else {
-            unsafe {
-                let cb = tx_ptr as *const CircularBuf;
-                let raw_size = ptr::read_volatile(ptr::addr_of!((*cb).buffer_size));
-                let rd = ptr::read_volatile(ptr::addr_of!((*cb).read_idx_mirror));
-                let wr = ptr::read_volatile(ptr::addr_of!((*cb).write_idx_mirror));
-                let rd_buf = ptr::read_volatile(ptr::addr_of!((*cb).rd_buffer_ptr)) as u32;
-                let wr_buf = ptr::read_volatile(ptr::addr_of!((*cb).wr_buffer_ptr)) as u32;
-                let data_len = cb.data_len();
-                (raw_size, rd, wr, rd_buf, wr_buf, data_len)
-            }
-        };
+        fence(Ordering::SeqCst);
+        crate::pac::MAILBOX1
+            .itr(0)
+            .write(|w| w.0 = 1u32 << self.qid);
+        Ok(())
+    }
+}
 
-        let (rx_raw_size, rx_rd, rx_wr, rx_rd_buf, rx_wr_buf, rx_data_len) = if rx_ptr == 0 {
-            (0i16, 0u32, 0u32, 0u32, 0u32, 0usize)
-        } else {
-            unsafe {
-                let cb = rx_ptr as *const CircularBuf;
-                let raw_size = ptr::read_volatile(ptr::addr_of!((*cb).buffer_size));
-                let rd = ptr::read_volatile(ptr::addr_of!((*cb).read_idx_mirror));
-                let wr = ptr::read_volatile(ptr::addr_of!((*cb).write_idx_mirror));
-                let rd_buf = ptr::read_volatile(ptr::addr_of!((*cb).rd_buffer_ptr)) as u32;
-                let wr_buf = ptr::read_volatile(ptr::addr_of!((*cb).wr_buffer_ptr)) as u32;
-                let data_len = cb.data_len();
-                (raw_size, rd, wr, rd_buf, wr_buf, data_len)
-            }
-        };
+impl embedded_io_async::ErrorType for IpcQueueTx {
+    type Error = Error;
+}
 
-        // 直接读取 mailbox 寄存器（只读操作）
-        let mb1 = crate::pac::MAILBOX1;
-        let mb2 = crate::pac::MAILBOX2;
-        let mb1_ier = mb1.ier(0).read().0 as u16;
-        let mb1_isr = mb1.isr(0).read().0 as u16;
-        let mb1_misr = mb1.misr(0).read().0 as u16;
-        let mb2_ier = mb2.ier(0).read().0 as u16;
-        let mb2_isr = mb2.isr(0).read().0 as u16;
-        let mb2_misr = mb2.misr(0).read().0 as u16;
+impl embedded_io_async::Write for IpcQueueTx {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        IpcQueueTx::write(self, buf)
+    }
 
-        debug!(
-            "IPC dbg: qid={} rx_len(cached)={} tx=0x{:08X} tx_size={} tx_rd=0x{:08X} tx_wr=0x{:08X} tx_pool(rd=0x{:08X} wr=0x{:08X}) tx_data_len={} rx=0x{:08X} rx_size={} rx_rd=0x{:08X} rx_wr=0x{:08X} rx_pool(rd=0x{:08X} wr=0x{:08X}) rx_data_len={} mb1(ier=0x{:04X} isr=0x{:04X} misr=0x{:04X}) mb2(ier=0x{:04X} isr=0x{:04X} misr=0x{:04X})",
-            self.qid,
-            rx_len_cached,
-            tx_ptr as u32,
-            tx_raw_size,
-            tx_rd,
-            tx_wr,
-            tx_rd_buf,
-            tx_wr_buf,
-            tx_data_len,
-            rx_ptr as u32,
-            rx_raw_size,
-            rx_rd,
-            rx_wr,
-            rx_rd_buf,
-            rx_wr_buf,
-            rx_data_len,
-            mb1_ier,
-            mb1_isr,
-            mb1_misr,
-            mb2_ier,
-            mb2_isr,
-            mb2_misr
-        );
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        IpcQueueTx::flush(self)
+    }
+}
+
+// ============================================================================
+// embedded_io_async trait implementations for IpcQueue
+// ============================================================================
+
+impl embedded_io_async::ErrorType for IpcQueue {
+    type Error = Error;
+}
+
+impl embedded_io_async::Read for IpcQueue {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        // embedded_io::Read 语义要求：至少读取 1 字节（除非 EOF 或错误）
+        // 这里使用 wait_readable 等待数据可用，然后读取
+        self.wait_readable().await?;
+        IpcQueue::read(self, buf)
+    }
+}
+
+impl embedded_io_async::Write for IpcQueue {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        // IpcQueue::write 是非阻塞的，直接调用
+        IpcQueue::write(self, buf)
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        // 触发 doorbell 通知 LCPU
+        IpcQueue::flush(self)
     }
 }
