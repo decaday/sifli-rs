@@ -147,6 +147,9 @@ pub enum LcpuError {
 
     /// Timeout waiting for LP_ACTIVE.
     WakeCoreTimeout,
+
+    /// Error reading BT warmup event from IPC.
+    WarmupReadError,
 }
 
 impl From<ram::Error> for LcpuError {
@@ -207,6 +210,65 @@ impl<'d> Lcpu<'d> {
 //=============================================================================
 
 impl<'d> Lcpu<'d> {
+    /// BLE 启动流程（异步）。
+    ///
+    /// 相比 [`power_on`](Self::power_on)，此方法额外处理：
+    /// 1. 启动后保持 LCPU 唤醒（调用 `rcc::wake_lcpu()`）
+    /// 2. 等待并消费 BT stack 的 warmup 事件
+    ///
+    /// ## Warmup 事件
+    ///
+    /// LCPU BT stack 启动后会发送一个 VSC 0xFC11 的 Command Complete 事件（7 字节）：
+    /// ```text
+    /// 04 0E 04 06 11 FC 00
+    /// │  │  │  │  └──┴── Opcode: 0xFC11 (Vendor Specific)
+    /// │  │  │  └─ Num_HCI_Command_Packets: 6
+    /// │  │  └─ Parameter_Total_Length: 4
+    /// │  └─ Event Code: 0x0E (Command Complete)
+    /// └─ H4 Indicator: 0x04 (HCI Event)
+    /// ```
+    ///
+    /// 必须在发送任何 HCI 命令之前消费此事件，否则可能干扰后续通信。
+    ///
+    /// ## 参数
+    ///
+    /// - `config`: LCPU 启动配置
+    /// - `hci_rx`: HCI 接收端，用于读取 warmup 事件（通常是 `IpcQueueRx`）
+    ///
+    /// ## Example
+    ///
+    /// ```no_run
+    /// # async fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
+    /// # let p = sifli_hal::init(Default::default());
+    /// # let lcpu = sifli_hal::lcpu::Lcpu::new(p.LPSYS_AON);
+    /// # let mut hci_rx: sifli_hal::ipc::IpcQueueRx = todo!();
+    /// use sifli_hal::lcpu::LcpuConfig;
+    ///
+    /// lcpu.ble_power_on(&LcpuConfig::default(), &mut hci_rx).await?;
+    /// // 现在可以安全地发送 HCI 命令
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn ble_power_on<R>(
+        &self,
+        config: &LcpuConfig,
+        hci_rx: &mut R,
+    ) -> Result<(), LcpuError>
+    where
+        R: embedded_io_async::Read,
+    {
+        // 1. 执行标准启动流程
+        self.power_on(config)?;
+
+        // 2. 保持 LCPU 唤醒（power_on 结束时允许了睡眠）
+        unsafe { rcc::wake_lcpu() };
+
+        // 3. 读取并丢弃 warmup 事件
+        consume_warmup_event(hci_rx).await?;
+
+        Ok(())
+    }
+
     /// 阻塞版 LCPU 启动流程。
     pub fn power_on(&self, config: &LcpuConfig) -> Result<(), LcpuError> {
         // 1. Wake LCPU。
@@ -389,5 +451,68 @@ fn install_patch_and_calibrate(
         warn!("RF calibration disabled by config");
     }
 
+    Ok(())
+}
+
+/// 消费 BT warmup 事件。
+///
+/// Warmup 事件是一个 H4 格式的 HCI Event 包：
+/// - H4 indicator: 0x04 (HCI Event)
+/// - Event code: 0x0E (Command Complete)
+/// - Parameter length: 0x04
+/// - Payload: 06 11 FC 00
+///
+/// 总共 7 字节。此函数读取并丢弃该事件。
+async fn consume_warmup_event<R>(rx: &mut R) -> Result<(), LcpuError>
+where
+    R: embedded_io_async::Read,
+{
+    // H4 HCI Event 格式：
+    // [0] H4 indicator (0x04 = Event)
+    // [1] Event code
+    // [2] Parameter length (N)
+    // [3..3+N] Parameters
+
+    let mut header = [0u8; 3];
+    read_exact(rx, &mut header).await?;
+
+    // 验证是 HCI Event
+    if header[0] != 0x04 {
+        warn!(
+            "Unexpected H4 indicator in warmup: 0x{:02X}, expected 0x04",
+            header[0]
+        );
+    }
+
+    // 读取剩余的参数
+    let param_len = header[2] as usize;
+    if param_len > 0 {
+        let mut params = [0u8; 255];
+        read_exact(rx, &mut params[..param_len]).await?;
+    }
+
+    debug!("BT warmup event consumed");
+    Ok(())
+}
+
+/// 读取精确数量的字节（embedded_io_async::Read 的辅助函数）。
+async fn read_exact<R>(rx: &mut R, buf: &mut [u8]) -> Result<(), LcpuError>
+where
+    R: embedded_io_async::Read,
+{
+    let mut offset = 0;
+    while offset < buf.len() {
+        match rx.read(&mut buf[offset..]).await {
+            Ok(0) => {
+                error!("Unexpected EOF while reading warmup event");
+                return Err(LcpuError::WarmupReadError);
+            }
+            Ok(n) => offset += n,
+            Err(_e) => {
+                error!("Read error while consuming warmup event");
+                return Err(LcpuError::WarmupReadError);
+            }
+        }
+    }
     Ok(())
 }

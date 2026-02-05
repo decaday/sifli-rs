@@ -38,6 +38,7 @@ use crate::ipc::{Error as IpcError, IpcQueue, IpcQueueRx, IpcQueueTx};
 
 /// bt-hci Transport 错误类型。
 #[derive(Debug)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
     /// IPC 读取错误。
     Read(ReadHciError<IpcError>),
@@ -102,6 +103,25 @@ impl IpcHciTransport {
     /// 创建新的 IPC HCI Transport。
     pub fn new(queue: IpcQueue) -> Self {
         let (rx, tx) = queue.split();
+        Self::from_parts(rx, tx)
+    }
+
+    /// 从已拆分的 RX/TX 端创建 Transport。
+    ///
+    /// 当需要在创建 Transport 之前访问 RX 端（如消费 warmup 事件）时使用此方法。
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # async fn example(queue: sifli_hal::ipc::IpcQueue) {
+    /// use sifli_hal::bt_hci::IpcHciTransport;
+    ///
+    /// let (mut rx, tx) = queue.split();
+    /// // 可以先用 rx 做一些操作（如 ble_power_on 消费 warmup）
+    /// let transport = IpcHciTransport::from_parts(rx, tx);
+    /// # }
+    /// ```
+    pub fn from_parts(rx: IpcQueueRx, tx: IpcQueueTx) -> Self {
         Self {
             rx: Mutex::new(rx),
             tx: Mutex::new(tx),
