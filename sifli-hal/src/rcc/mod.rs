@@ -5,6 +5,7 @@ pub use clock::*;
 
 // Re-export PAC RCC enums
 pub use crate::pac::hpsys_rcc::vals;
+pub use crate::pac::lpsys_rcc::vals as lpsys_vals;
 
 use crate::time::Hertz;
 

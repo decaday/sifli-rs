@@ -117,18 +117,59 @@ pub fn get_lpsys_hclk_div() -> u8 {
     LPSYS_RCC.cfgr().read().hdiv1().to_bits()
 }
 
+/// Get LPSYS system clock frequency (clk_lpsys).
+pub fn get_lpsys_sysclk_freq() -> Option<Hertz> {
+    let csr = LPSYS_RCC.csr().read();
+    match csr.sel_sys() {
+        lpsys_vals::Sysclk::Hrc48 => get_hrc48_freq(),
+        lpsys_vals::Sysclk::Hxt48 => get_hxt48_freq(),
+    }
+}
+
 /// Get current LPSYS HCLK frequency from hardware registers.
 pub fn get_lpsys_hclk_freq() -> Option<Hertz> {
-    let csr = LPSYS_RCC.csr().read();
-    let clk_lpsys = match csr.sel_sys() {
-        lpsys_vals::Sysclk::Hrc48 => get_hrc48_freq()?,
-        lpsys_vals::Sysclk::Hxt48 => get_hxt48_freq()?,
-    };
+    let clk_lpsys = get_lpsys_sysclk_freq()?;
 
     let hdiv = LPSYS_RCC.cfgr().read().hdiv1().to_bits();
     let divisor = if hdiv == 0 { 1 } else { hdiv as u32 };
 
     Some(clk_lpsys / divisor)
+}
+
+/// Get LPSYS PCLK1 frequency.
+pub fn get_lpsys_pclk1_freq() -> Option<Hertz> {
+    let hclk = get_lpsys_hclk_freq()?;
+    let pdiv1 = LPSYS_RCC.cfgr().read().pdiv1().to_bits();
+    Some(hclk / (1u32 << pdiv1))
+}
+
+/// Get LPSYS PCLK2 frequency.
+pub fn get_lpsys_pclk2_freq() -> Option<Hertz> {
+    let hclk = get_lpsys_hclk_freq()?;
+    let pdiv2 = LPSYS_RCC.cfgr().read().pdiv2().to_bits();
+    Some(hclk / (1u32 << pdiv2))
+}
+
+/// Get LPSYS peripheral clock frequency (clk_peri_lpsys).
+pub fn get_lpsys_clk_peri_freq() -> Option<Hertz> {
+    use crate::pac::lpsys_rcc::vals::mux::Perisel;
+    let csr = LPSYS_RCC.csr().read();
+    match csr.sel_peri() {
+        Perisel::Hrc48 => get_hrc48_freq(),
+        Perisel::Hxt48 => get_hxt48_freq(),
+    }
+}
+
+/// Get LPSYS MAC clock frequency.
+pub fn get_lpsys_mac_clk_freq() -> Option<Hertz> {
+    let hclk = get_lpsys_hclk_freq()?;
+    let cfgr = LPSYS_RCC.cfgr().read();
+    let macdiv = cfgr.macdiv().to_bits();
+    if macdiv == 0 {
+        Some(hclk)
+    } else {
+        Some(hclk / macdiv as u32)
+    }
 }
 
 /// Assert or deassert LCPU reset in LPSYS domain.
@@ -159,6 +200,110 @@ pub fn lp_mac_reset_asserted() -> bool {
 /// Check whether RFC reset bit is asserted.
 pub fn lp_rfc_reset_asserted() -> bool {
     LPSYS_RCC.rstr1().read().rfc()
+}
+
+// =============================================================================
+// LPSYS Clock Configuration API
+// =============================================================================
+
+/// Configure LPSYS HCLK frequency (in MHz).
+///
+/// This function automatically handles DVFS mode transitions when crossing
+/// the 24MHz boundary between D mode and S mode.
+///
+/// # Arguments
+///
+/// * `freq_mhz` - Target frequency in MHz (1-48)
+///
+/// # Returns
+///
+/// * `Ok(())` - Configuration successful
+/// * `Err(&str)` - Error message if configuration fails
+///
+/// # Safety
+///
+/// This function modifies hardware registers and should be called with care.
+/// Ensure no LPSYS peripherals are actively in use during frequency changes.
+pub unsafe fn config_lpsys_hclk_mhz(freq_mhz: u32) -> Result<(), &'static str> {
+    use crate::pmu::dvfs::config_lpsys_dvfs;
+
+    // Validate frequency range
+    if freq_mhz == 0 || freq_mhz > 48 {
+        return Err("LPSYS HCLK frequency must be 1-48 MHz");
+    }
+
+    let target_freq = Hertz(freq_mhz * 1_000_000);
+    let current_freq = get_lpsys_hclk_freq().unwrap_or(Hertz(48_000_000));
+
+    // Calculate divider (LPSYS sysclk is 48MHz from HRC48 or HXT48)
+    let sysclk_freq = get_lpsys_sysclk_freq().unwrap_or(Hertz(48_000_000));
+    let hdiv = if target_freq >= sysclk_freq {
+        0 // No division
+    } else {
+        (sysclk_freq.0 / target_freq.0) as u8
+    };
+
+    // Use DVFS API to handle voltage transitions
+    config_lpsys_dvfs(current_freq, target_freq, || {
+        set_lpsys_hdiv(hdiv);
+    });
+
+    // Update cached clocks if initialized
+    // Note: The caller should call set_freqs() to update the cached values if needed
+
+    Ok(())
+}
+
+/// Set LPSYS HCLK divider (HDIV1).
+///
+/// hclk_lpsys = clk_lpsys / HDIV (if HDIV=0, no division)
+///
+/// # Arguments
+///
+/// * `hdiv` - Divider value (0 = no division, 1-63 = divide by hdiv)
+pub fn set_lpsys_hdiv(hdiv: u8) {
+    LPSYS_RCC.cfgr().modify(|w| {
+        w.set_hdiv1(lpsys_vals::Hdiv::from_bits(hdiv));
+    });
+}
+
+/// Set LPSYS clock dividers.
+///
+/// # Arguments
+///
+/// * `hdiv` - HCLK divider (0 = no division, 1-63)
+/// * `pdiv1` - PCLK1 prescaler (0-7, divides by 2^pdiv1)
+/// * `pdiv2` - PCLK2 prescaler (0-7, divides by 2^pdiv2)
+pub fn set_lpsys_div(hdiv: u8, pdiv1: u8, pdiv2: u8) {
+    LPSYS_RCC.cfgr().modify(|w| {
+        w.set_hdiv1(lpsys_vals::Hdiv::from_bits(hdiv));
+        w.set_pdiv1(lpsys_vals::Pdiv::from_bits(pdiv1));
+        w.set_pdiv2(lpsys_vals::Pdiv::from_bits(pdiv2));
+    });
+}
+
+/// Configure LPSYS MAC clock.
+///
+/// # Arguments
+///
+/// * `macdiv` - MAC clock divider (MACCLK = hclk_lpsys / MACDIV)
+/// * `macfreq` - MAC frequency hint (for hardware use)
+pub fn config_lpsys_mac_clock(macdiv: u8, macfreq: u8) {
+    LPSYS_RCC.cfgr().modify(|w| {
+        w.set_macdiv(lpsys_vals::Macdiv::from_bits(macdiv));
+        w.set_macfreq(macfreq);
+    });
+}
+
+/// Select LPSYS system clock source.
+///
+/// # Arguments
+///
+/// * `source` - Clock source (HRC48 or HXT48)
+pub fn select_lpsys_sysclk(source: lpsys_vals::Sysclk) {
+    LPSYS_RCC.csr().modify(|w| {
+        w.set_sel_sys(source);
+    });
 }
 
 pub const CLK_LRC10_FREQ: Hertz = Hertz(100_000);
@@ -482,6 +627,20 @@ pub struct Clocks {
     pub clk_aud_pll: MaybeHertz,
     /// Audio PLL / 16 clock
     pub clk_aud_pll_div16: MaybeHertz,
+
+    // === LPSYS clocks ===
+    /// LPSYS system clock (clk_lpsys)
+    pub lp_sysclk: MaybeHertz,
+    /// LPSYS AHB clock (hclk_lpsys)
+    pub lp_hclk: MaybeHertz,
+    /// LPSYS APB1 clock (pclk1_lpsys)
+    pub lp_pclk1: MaybeHertz,
+    /// LPSYS APB2 clock (pclk2_lpsys)
+    pub lp_pclk2: MaybeHertz,
+    /// LPSYS peripheral clock (clk_peri_lpsys)
+    pub lp_clk_peri: MaybeHertz,
+    /// LPSYS MAC clock
+    pub lp_mac_clk: MaybeHertz,
 }
 
 // 1. HAL_PreInit
@@ -810,6 +969,14 @@ pub(crate) unsafe fn init(config: Config) {
             // Audio PLL is managed by AUDCODEC driver, default to None here
             clk_aud_pll: None.into(),
             clk_aud_pll_div16: None.into(),
+
+            // LPSYS clocks - read from hardware
+            lp_sysclk: get_lpsys_sysclk_freq().into(),
+            lp_hclk: get_lpsys_hclk_freq().into(),
+            lp_pclk1: get_lpsys_pclk1_freq().into(),
+            lp_pclk2: get_lpsys_pclk2_freq().into(),
+            lp_clk_peri: get_lpsys_clk_peri_freq().into(),
+            lp_mac_clk: get_lpsys_mac_clk_freq().into(),
         };
 
         set_freqs(final_clocks);
