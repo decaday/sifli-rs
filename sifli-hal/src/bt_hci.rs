@@ -38,12 +38,21 @@ use crate::ipc::{Error as IpcError, IpcQueue, IpcQueueRx, IpcQueueTx};
 
 /// bt-hci Transport 错误类型。
 #[derive(Debug)]
-#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 pub enum Error {
     /// IPC 读取错误。
     Read(ReadHciError<IpcError>),
     /// IPC 写入错误。
     Write(IpcError),
+}
+
+#[cfg(feature = "defmt")]
+impl defmt::Format for Error {
+    fn format(&self, f: defmt::Formatter) {
+        match self {
+            Error::Read(e) => defmt::write!(f, "HCI read error: {:?}", defmt::Debug2Format(e)),
+            Error::Write(e) => defmt::write!(f, "HCI write error: {}", e),
+        }
+    }
 }
 
 impl core::fmt::Display for Error {
