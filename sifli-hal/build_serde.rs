@@ -205,7 +205,10 @@ pub struct Interrupt {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Peripherals {
+    #[serde(default)]
     pub hcpu: Vec<Peripheral>,
+    #[serde(default)]
+    pub lcpu: Vec<Peripheral>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

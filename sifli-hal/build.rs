@@ -58,6 +58,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _blocks = ir.blocks;
     let fieldsets = ir.fieldsets;
 
+    // Read and parse LPSYS_RCC.yaml (optional, for LCPU peripheral support)
+    let lpsys_rcc_path = data_dir.join("LPSYS_RCC.yaml");
+    let lpsys_fieldsets = if lpsys_rcc_path.exists() {
+        let lpsys_rcc_content = fs::read_to_string(&lpsys_rcc_path)
+            .map_err(|e| format!("Failed to read LPSYS_RCC.yaml: {}", e))?;
+        let lpsys_ir: IR = serde_yaml::from_str(&lpsys_rcc_content)
+            .map_err(|e| format!("Failed to parse LPSYS_RCC.yaml: {}", e))?;
+        Some(lpsys_ir.fieldsets)
+    } else {
+        None
+    };
+
     // Read and parse interrupts.yaml
     let interrupts_path = data_dir.join("interrupts.yaml");
     let interrupts_content = fs::read_to_string(&interrupts_path)
@@ -127,7 +139,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     token_stream.extend(peripherals_singleton);
 
     // Generate rcc implementations
-    let rcc_impls = generate_rcc_impls(&peripherals, &fieldsets);
+    let rcc_impls = generate_rcc_impls(&peripherals, &fieldsets, &lpsys_fieldsets);
     token_stream.extend(rcc_impls);
 
     // Generate pin implementations
@@ -322,15 +334,20 @@ fn parse_c_u32_array(path: &Path, symbol: &str) -> Result<Vec<u32>, Box<dyn std:
     Ok(values)
 }
 
-fn generate_rcc_impls(peripherals: &Peripherals, fieldsets: &BTreeMap<String, FieldSet>) -> TokenStream {
+fn generate_rcc_impls(
+    peripherals: &Peripherals,
+    fieldsets: &BTreeMap<String, FieldSet>,
+    lpsys_fieldsets: &Option<BTreeMap<String, FieldSet>>,
+) -> TokenStream {
     let mut implementations = TokenStream::new();
-    
-    // Get RCC register fieldsets
+
+    // Get HPSYS RCC register fieldsets
     let rstr1 = fieldsets.get("RSTR1").expect("RSTR1 fieldset not found");
     let rstr2 = fieldsets.get("RSTR2").expect("RSTR2 fieldset not found");
     let enr1 = fieldsets.get("ENR1").expect("ENR1 fieldset not found");
     let enr2 = fieldsets.get("ENR2").expect("ENR2 fieldset not found");
 
+    // Generate HCPU peripheral RCC implementations
     for peripheral in &peripherals.hcpu {
         if !peripheral.enable_reset {
             continue;
@@ -381,7 +398,7 @@ fn generate_rcc_impls(peripherals: &Peripherals, fieldsets: &BTreeMap<String, Fi
                 #[inline(always)]
                 fn rcc_reset() {
                     crate::pac::HPSYS_RCC.#rstr_reg_ident().modify(|w| w.#field_set_ident(true));
-                    while !crate::pac::HPSYS_RCC.#rstr_reg_ident().read().#field_name_ident() {}; 
+                    while !crate::pac::HPSYS_RCC.#rstr_reg_ident().read().#field_name_ident() {};
                     crate::pac::HPSYS_RCC.#rstr_reg_ident().modify(|w| w.#field_set_ident(false));
                 }
             }
@@ -390,7 +407,87 @@ fn generate_rcc_impls(peripherals: &Peripherals, fieldsets: &BTreeMap<String, Fi
         implementations.extend(impl_tokens);
     }
 
+    // Generate LCPU peripheral RCC implementations (using LPSYS_RCC)
+    if let Some(lp_fieldsets) = lpsys_fieldsets {
+        let lp_rstr1 = lp_fieldsets.get("RSTR1").expect("LPSYS RSTR1 fieldset not found");
+        let lp_enr1 = lp_fieldsets.get("ENR1").expect("LPSYS ENR1 fieldset not found");
+
+        for peripheral in &peripherals.lcpu {
+            if !peripheral.enable_reset {
+                continue;
+            }
+
+            if peripheral.ignore_missing_enable_reset {
+                let peripheral_name_ident = format_ident!("{}", peripheral.name);
+                let impl_tokens = quote! {
+                    impl crate::rcc::SealedRccEnableReset for #peripheral_name_ident {}
+                    impl crate::rcc::RccEnableReset for #peripheral_name_ident {}
+                };
+                implementations.extend(impl_tokens);
+                continue;
+            }
+
+            // Get field name (prefer rcc_field if available)
+            let field_name = &peripheral.rcc_field.clone()
+                .unwrap_or(peripheral.name.clone()).to_lowercase();
+
+            // Find matching fields in LPSYS RCC registers
+            let enr_field = find_field_in_registers(&[
+                ("ENR1", lp_enr1),
+            ], field_name);
+
+            let rstr_field = find_field_in_registers(&[
+                ("RSTR1", lp_rstr1),
+            ], field_name);
+
+            // Both enable and reset fields must exist for full implementation
+            match (enr_field, rstr_field) {
+                (Some((enr_reg, _)), Some((rstr_reg, _))) => {
+                    let field_set_ident = format_ident!("set_{}", field_name);
+                    let field_name_ident = format_ident!("{}", field_name);
+                    let enr_reg_ident = format_ident!("{}", enr_reg.to_lowercase());
+                    let rstr_reg_ident = format_ident!("{}", rstr_reg.to_lowercase());
+
+                    let peripheral_name_ident = format_ident!("{}", peripheral.name);
+                    let impl_tokens = quote! {
+                        impl crate::rcc::SealedRccEnableReset for #peripheral_name_ident {
+                            #[inline(always)]
+                            fn rcc_enable() {
+                                crate::pac::LPSYS_RCC.#enr_reg_ident().modify(|w| w.#field_set_ident(true));
+                            }
+
+                            #[inline(always)]
+                            fn rcc_disable() {
+                                crate::pac::LPSYS_RCC.#enr_reg_ident().modify(|w| w.#field_set_ident(false));
+                            }
+
+                            #[inline(always)]
+                            fn rcc_reset() {
+                                crate::pac::LPSYS_RCC.#rstr_reg_ident().modify(|w| w.#field_set_ident(true));
+                                while !crate::pac::LPSYS_RCC.#rstr_reg_ident().read().#field_name_ident() {};
+                                crate::pac::LPSYS_RCC.#rstr_reg_ident().modify(|w| w.#field_set_ident(false));
+                            }
+                        }
+                        impl crate::rcc::RccEnableReset for #peripheral_name_ident {}
+                    };
+                    implementations.extend(impl_tokens);
+                }
+                _ => {
+                    // Generate empty impl if fields are missing (some peripherals may only have reset or enable)
+                    let peripheral_name_ident = format_ident!("{}", peripheral.name);
+                    let impl_tokens = quote! {
+                        impl crate::rcc::SealedRccEnableReset for #peripheral_name_ident {}
+                        impl crate::rcc::RccEnableReset for #peripheral_name_ident {}
+                    };
+                    implementations.extend(impl_tokens);
+                }
+            }
+        }
+    }
+
     implementations.extend(quote! {use crate::time::Hertz;});
+
+    // Generate RccGetFreq for HCPU peripherals
     for peripheral in &peripherals.hcpu {
         if let Some(clock) = peripheral.clock.clone() {
             let clock_name_ident = format_ident!("{}", clock);
@@ -407,6 +504,25 @@ fn generate_rcc_impls(peripherals: &Peripherals, fieldsets: &BTreeMap<String, Fi
             implementations.extend(impl_tokens);
         }
     }
+
+    // Generate RccGetFreq for LCPU peripherals
+    for peripheral in &peripherals.lcpu {
+        if let Some(clock) = peripheral.clock.clone() {
+            let clock_name_ident = format_ident!("{}", clock);
+            let peripheral_name_ident = format_ident!("{}", peripheral.name);
+            let impl_tokens = quote! {
+                impl crate::rcc::SealedRccGetFreq for #peripheral_name_ident {
+                    fn get_freq() -> Option<Hertz> {
+                        crate::rcc::clocks().#clock_name_ident.into()
+                    }
+                }
+                impl crate::rcc::RccGetFreq for #peripheral_name_ident {}
+            };
+
+            implementations.extend(impl_tokens);
+        }
+    }
+
     implementations
 }
 
@@ -442,7 +558,17 @@ fn generate_peripherals_singleton(
     dma: &build_serde::DmaHcpu,
     mailbox: &build_serde::Mailbox,
 ) -> TokenStream {
-    let peripheral_names: Vec<_> = peripherals.hcpu
+    // Generate singletons for HCPU peripherals
+    let hcpu_peripheral_names: Vec<_> = peripherals.hcpu
+        .iter()
+        .map(|p| {
+            let name = &p.name;
+            quote::format_ident!("{}", name)
+        })
+        .collect();
+
+    // Generate singletons for LCPU peripherals
+    let lcpu_peripheral_names: Vec<_> = peripherals.lcpu
         .iter()
         .map(|p| {
             let name = &p.name;
@@ -478,7 +604,8 @@ fn generate_peripherals_singleton(
 
     quote! {
         embassy_hal_internal::peripherals! {
-            #(#peripheral_names,)*
+            #(#hcpu_peripheral_names,)*
+            #(#lcpu_peripheral_names,)*
             #(#gpio_pins,)*
             #(#dmac_channels,)*
             #(#mailbox_channels,)*
