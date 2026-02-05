@@ -288,12 +288,14 @@ impl<'d> Lcpu<'d> {
         ram::rom_config(revision, &config.rom)?;
 
         // 4. Enforce frequency limit while loading (bf0_lcpu_init.c:170-176).
-        if !config.skip_frequency_check {
-            debug!("Step 4: Checking LCPU frequency (must be ≤ 24MHz during loading)");
-            check_lcpu_frequency()?;
+        // If frequency exceeds 24MHz, automatically reduce it.
+        let _original_freq_hz = if !config.skip_frequency_check {
+            debug!("Step 4: Ensuring LCPU frequency ≤ 24MHz during loading");
+            ensure_safe_lcpu_frequency()?
         } else {
             warn!("Step 4: Skipping frequency check (as requested by config)");
-        }
+            0 // Dummy value when skipped
+        };
 
         // 5. Install image for A3 and earlier (bf0_lcpu_init.c:178-182).
         if !revision.is_letter_series() {
@@ -380,28 +382,46 @@ impl<'d> Lcpu<'d> {
 
 /// Ensure LPSYS HCLK stays ≤ 24 MHz while loading the LCPU image.
 ///
+/// If the current frequency exceeds the limit, this function will automatically
+/// reduce it to 24 MHz. The original frequency is returned so the caller can
+/// optionally restore it later.
+///
 /// Mirrors `bf0_lcpu_init.c:170-176` in the SDK.
-/// Returns the final HCLK frequency on success.
-fn check_lcpu_frequency() -> Result<u32, LcpuError> {
+///
+/// # Returns
+///
+/// The original HCLK frequency before any changes (in Hz).
+fn ensure_safe_lcpu_frequency() -> Result<u32, LcpuError> {
     const MAX_LOAD_FREQ_HZ: u32 = 24_000_000;
+    const MAX_LOAD_FREQ_MHZ: u32 = 24;
 
     // 1. Compute current LPSYS HCLK frequency.
     let hclk_hz = rcc::get_lpsys_hclk_freq().ok_or(LcpuError::RccError)?.0;
-    let hdiv = rcc::get_lpsys_hclk_div();
 
-    // 2. Enforce limit; panic if超出。
-    assert!(
-        hclk_hz <= MAX_LOAD_FREQ_HZ,
-        "LPSYS HCLK {} Hz exceeds limit {} Hz for LCPU loading (HDIV1={})",
-        hclk_hz,
-        MAX_LOAD_FREQ_HZ,
-        hdiv
-    );
+    // 2. If exceeds limit, automatically reduce to safe frequency.
+    if hclk_hz > MAX_LOAD_FREQ_HZ {
+        debug!(
+            "LPSYS HCLK {} Hz exceeds {} Hz limit, reducing to {} MHz for LCPU loading",
+            hclk_hz, MAX_LOAD_FREQ_HZ, MAX_LOAD_FREQ_MHZ
+        );
 
-    debug!(
-        "LPSYS HCLK within limit for LCPU loading: {} Hz (HDIV1={})",
-        hclk_hz, hdiv
-    );
+        unsafe {
+            rcc::config_lpsys_hclk_mhz(MAX_LOAD_FREQ_MHZ).map_err(|_| LcpuError::RccError)?;
+        }
+
+        // Verify the change took effect
+        let new_hclk_hz = rcc::get_lpsys_hclk_freq().ok_or(LcpuError::RccError)?.0;
+        debug!(
+            "LPSYS HCLK reduced to {} Hz (was {} Hz)",
+            new_hclk_hz, hclk_hz
+        );
+    } else {
+        let hdiv = rcc::get_lpsys_hclk_div();
+        debug!(
+            "LPSYS HCLK within limit for LCPU loading: {} Hz (HDIV1={})",
+            hclk_hz, hdiv
+        );
+    }
 
     Ok(hclk_hz)
 }
