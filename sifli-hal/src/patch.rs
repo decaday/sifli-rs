@@ -355,7 +355,12 @@ fn install_a3(list: &[u8], bin: &[u8]) -> Result<(), Error> {
 /// Install Letter-Series patches (A4/B4 and later).
 ///
 /// Letter-Series uses a different memory layout with a header at LETTER_BUF_START.
-fn install_letter(_list: &[u8], bin: &[u8]) -> Result<(), Error> {
+/// Two separate mechanisms are installed:
+/// 1. **PACH header** at 0x20405000: ROM reads this to find patch code entry point
+/// 2. **PTCH hardware entries** from `list`: programs PATCH peripheral to intercept ROM instructions
+///
+/// Reference: `lcpu_patch_rev_b.c:lcpu_patch_install_rev_b()` + `bf0_hal_patch.c:HAL_PATCH_install()`
+fn install_letter(list: &[u8], bin: &[u8]) -> Result<(), Error> {
     let code_size = bin.len();
     if code_size > PatchRegion::LETTER_CODE_SIZE {
         return Err(Error::CodeTooLarge {
@@ -364,9 +369,19 @@ fn install_letter(_list: &[u8], bin: &[u8]) -> Result<(), Error> {
         });
     }
 
-    debug!("Installing Letter Series patch: code={} bytes", code_size);
+    debug!(
+        "Installing Letter Series patch: code={} bytes, list={} bytes",
+        code_size,
+        list.len()
+    );
 
-    // Step 1: Write header (12 bytes)
+    // Step 0: Clear LCPU code RAM area before patch install.
+    // Reference: bf0_lcpu_init.c: memset((void *)0x20400000, 0, 0x500)
+    unsafe {
+        core::ptr::write_bytes(0x2040_0000 as *mut u8, 0, 0x500);
+    }
+
+    // Step 1: Write PACH header (12 bytes) - for ROM to find patch code entry point.
     // Reference: lcpu_patch_rev_b.c:60-66
     let header = [
         PatchRegion::LETTER_MAGIC,                 // magic: "PACH"
@@ -384,46 +399,31 @@ fn install_letter(_list: &[u8], bin: &[u8]) -> Result<(), Error> {
         header_addr, header[0], header[1], header[2]
     );
 
-    // Step 2: Configure PATCH hardware
-    // Note: Letter series header format differs from A3, may not parse correctly
-    match hal_patch_install(header_addr) {
-        Ok(mask) => {
-            debug!(
-                "  PATCH HW configured: {} channels enabled",
-                mask.count_ones()
-            );
-        }
-        Err(e) => {
-            // For Letter series, the header format is different
-            // The patch code still gets executed via HAL_PATCH_Entry mechanism
-            debug!(
-                "  PATCH HW install skipped (expected for Letter series): {:?}",
-                e
-            );
-        }
-    }
-
-    // Step 3: Clear patch code area
+    // Step 2: Clear patch code area and copy patch binary.
     let code_addr = PatchRegion::LETTER_CODE_START;
     // SAFETY: LETTER_CODE_START is a valid LCPU RAM address
     unsafe {
         core::ptr::write_bytes(code_addr as *mut u8, 0, PatchRegion::LETTER_CODE_SIZE);
-    }
-
-    // Step 4: Copy patch code
-    // SAFETY: LETTER_CODE_START is a valid LCPU RAM address
-    unsafe {
         core::ptr::copy_nonoverlapping(bin.as_ptr(), code_addr as *mut u8, bin.len());
     }
     debug!("  Code copied to 0x{:08X} ({} bytes)", code_addr, bin.len());
 
-    // Log first few words of the code for debugging
-    #[cfg(feature = "defmt")]
-    {
-        let code_ptr = code_addr as *const u32;
-        let word0 = unsafe { *code_ptr };
-        let word1 = unsafe { *code_ptr.add(1) };
-        debug!("  Code start: [0x{:08X}, 0x{:08X}]", word0, word1);
+    // Step 3: Install hardware PATCH entries from list data (PTCH tag + 6 entries).
+    // SDK: HAL_PATCH_install() reads from HAL_PATCH_GetEntryAddr() which returns g_lcpu_patch_list.
+    // The list contains PTCH tag (0x50544348) + size + 6 patch entries that program the
+    // PATCH hardware peripheral to intercept and replace ROM instructions at runtime.
+    // Reference: bf0_hal_patch.c:HAL_PATCH_install() -> HAL_PATCH_install2()
+    match hal_patch_install(list.as_ptr() as usize) {
+        Ok(mask) => {
+            info!(
+                "  PATCH HW configured: {} channels enabled (mask=0x{:08X})",
+                mask.count_ones(),
+                mask
+            );
+        }
+        Err(e) => {
+            warn!("  PATCH HW install failed: {:?}", e);
+        }
     }
 
     info!("Letter Series patch installed successfully");
