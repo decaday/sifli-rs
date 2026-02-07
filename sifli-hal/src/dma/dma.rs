@@ -83,13 +83,19 @@ pub(crate) unsafe fn init(
     cs: critical_section::CriticalSection,
 ) {
     crate::rcc::enable_and_reset_with_cs::<peripherals::DMAC1>(cs);
+
+    // Initialize DMAC2 if LCPU feature is enabled
+    #[cfg(feature = "sf32lb52x-lcpu")]
+    {
+        crate::rcc::enable_and_reset_with_cs::<peripherals::DMAC2>(cs);
+    }
 }
 
 impl AnyChannel {
     /// Safety: Must be called with a matching set of parameters for a valid dma channel
     pub(crate) unsafe fn on_irq(&self) {
         let info = self.info();
-        let state = &STATE[self.id as usize];
+        let state = &STATE[self.state_index()];
         let r = info.dma;
         let cr = r.ccr(info.num);
         let isr = r.isr().read();
@@ -136,7 +142,7 @@ impl AnyChannel {
 
         let info = self.info();
         let r = info.dma;
-        let state: &ChannelState = &STATE[self.id as usize];
+        let state: &ChannelState = &STATE[self.state_index()];
         let channel_num = info.num;
 
         state.complete_count.store(0, Ordering::Release);
@@ -441,7 +447,7 @@ impl<'a> Unpin for Transfer<'a> {}
 impl<'a> Future for Transfer<'a> {
     type Output = ();
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let state: &ChannelState = &STATE[self.channel.id as usize];
+        let state: &ChannelState = &STATE[self.channel.state_index()];
 
         state.waker.register(cx.waker());
 
@@ -462,12 +468,12 @@ impl<'a> DmaCtrl for DmaCtrlImpl<'a> {
     }
 
     fn reset_complete_count(&mut self) -> usize {
-        let state = &STATE[self.0.id as usize];
+        let state = &STATE[self.0.state_index()];
         return state.complete_count.swap(0, Ordering::AcqRel);
     }
 
     fn set_waker(&mut self, waker: &Waker) {
-        STATE[self.0.id as usize].waker.register(waker);
+        STATE[self.0.state_index()].waker.register(waker);
     }
 }
 

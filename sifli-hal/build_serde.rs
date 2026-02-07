@@ -80,11 +80,15 @@ pub struct AdcPeripheral {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Dma {
-    pub hcpu: DmaHcpu,
+    /// HCPU DMA controllers (required, e.g., DMAC1)
+    pub hcpu: DmaControllers,
+    /// LCPU DMA controllers (optional, e.g., DMAC2)
+    #[serde(default)]
+    pub lcpu: Option<DmaControllers>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct DmaHcpu {
+pub struct DmaControllers {
     #[serde(flatten)]
     pub controllers: BTreeMap<String, DmaController>,
 }

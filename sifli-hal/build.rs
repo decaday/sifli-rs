@@ -135,7 +135,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     token_stream.extend(interrupt_mod);
 
     // Generate peripherals singleton
-    let peripherals_singleton = generate_peripherals_singleton(&peripherals, &dma.hcpu, &mailbox);
+    let peripherals_singleton = generate_peripherals_singleton(&peripherals, &dma, &mailbox);
     token_stream.extend(peripherals_singleton);
 
     // Generate rcc implementations
@@ -555,7 +555,7 @@ fn generate_interrupt_mod(interrupts: &Interrupts) -> TokenStream {
 
 fn generate_peripherals_singleton(
     peripherals: &Peripherals,
-    dma: &build_serde::DmaHcpu,
+    dma: &build_serde::Dma,
     mailbox: &build_serde::Mailbox,
 ) -> TokenStream {
     // Generate singletons for HCPU peripherals
@@ -584,14 +584,25 @@ fn generate_peripherals_singleton(
         })
         .collect();
 
-    // Iterate over all DMA controllers (e.g., DMAC1, DMAC2) found in the yaml.
-    let dmac_channels: Vec<_> = dma.controllers.iter().flat_map(|(name, controller)| {
+    // Iterate over all HCPU DMA controllers (e.g., DMAC1)
+    let hcpu_dmac_channels: Vec<_> = dma.hcpu.controllers.iter().flat_map(|(name, controller)| {
         (1..=controller.channel_total).map(move |i| {
-            // Generate singletons like `DMAC1_CH1`, `DMAC1_CH2`...
             let channel_name = format!("{}_CH{}", name, i);
             quote::format_ident!("{}", channel_name)
         })
     }).collect();
+
+    // Iterate over all LCPU DMA controllers (e.g., DMAC2) if present
+    let lcpu_dmac_channels: Vec<_> = dma.lcpu.as_ref()
+        .map(|lcpu| {
+            lcpu.controllers.iter().flat_map(|(name, controller)| {
+                (1..=controller.channel_total).map(move |i| {
+                    let channel_name = format!("{}_CH{}", name, i);
+                    quote::format_ident!("{}", channel_name)
+                })
+            }).collect()
+        })
+        .unwrap_or_default();
 
     // Iterate over all Mailbox peripherals (e.g., MAILBOX1, MAILBOX2) found in the yaml.
     let mailbox_channels: Vec<_> = mailbox.iter().flat_map(|(name, config)| {
@@ -607,7 +618,8 @@ fn generate_peripherals_singleton(
             #(#hcpu_peripheral_names,)*
             #(#lcpu_peripheral_names,)*
             #(#gpio_pins,)*
-            #(#dmac_channels,)*
+            #(#hcpu_dmac_channels,)*
+            #(#lcpu_dmac_channels,)*
             #(#mailbox_channels,)*
         }
     }
@@ -887,14 +899,14 @@ fn generate_dma_impls(dma: &build_serde::Dma) -> TokenStream {
         .flat_map(move |req| {
             // For each request, get the necessary info
             let (peripheral_str, signal_str) = req.name.split_once('_').unwrap_or((&req.name, ""));
-            
+
             // Prefer explicit module name from yaml, otherwise infer from peripheral name.
             let module_name = req.module.clone()
                 .unwrap_or_else(|| {
                     // Remove trailing digits (e.g., "USART1" -> "usart")
                     peripheral_str.trim_end_matches(|c: char| c.is_ascii_digit()).to_string()
                 });
-            
+
             let module_ident = format_ident!("{}", module_name);
             let peripheral_ident = format_ident!("{}", peripheral_str.to_uppercase());
             let trait_ident = if signal_str.is_empty() {
@@ -928,18 +940,31 @@ fn generate_dma_impls(dma: &build_serde::Dma) -> TokenStream {
         #(#trait_impls)*
     });
 
-    // 3. Generate channel constant, implementations and interrupts
-    if let Some(dmac1) = dma_hcpu.controllers.get("DMAC1") {
-        let channel_count = dmac1.channel_total as usize;
-        implementations.extend(quote! {
-            /// The number of channels in the DMAC1 controller.
-            pub const CHANNEL_COUNT: usize = #channel_count;
-        });
-    } else {
-        // We only consider DMAC1 for now
-        panic!("DMAC1 controller not found in dma.yaml");
-    }
+    // 3. Generate channel constants
+    // Channel ID encoding:
+    //   - DMAC1: 0x00-0x07 (bit7=0)
+    //   - DMAC2: 0x80-0x87 (bit7=1)
+    let dmac1_count = dma_hcpu.controllers.get("DMAC1")
+        .map(|c| c.channel_total as usize)
+        .unwrap_or(0);
+    let dmac2_count = dma.lcpu.as_ref()
+        .and_then(|lcpu| lcpu.controllers.get("DMAC2"))
+        .map(|c| c.channel_total as usize)
+        .unwrap_or(0);
+    let total_channel_count = dmac1_count + dmac2_count;
 
+    implementations.extend(quote! {
+        /// The number of channels in DMAC1.
+        pub const DMAC1_CHANNEL_COUNT: usize = #dmac1_count;
+        /// The number of channels in DMAC2.
+        pub const DMAC2_CHANNEL_COUNT: usize = #dmac2_count;
+        /// Total number of DMA channels across all controllers.
+        pub const CHANNEL_COUNT: usize = #total_channel_count;
+        /// Bit mask to identify DMAC2 channels (bit 7 set).
+        pub const DMAC2_ID_FLAG: u8 = 0x80;
+    });
+
+    // 4. Generate DMAC1 channel implementations and interrupts
     for (dmac_name, controller) in &dma_hcpu.controllers {
         for i in 1..=controller.channel_total {
             let channel_index = i - 1;
@@ -958,7 +983,25 @@ fn generate_dma_impls(dma: &build_serde::Dma) -> TokenStream {
         }
     }
 
-    // 4. Generate the function to enable DMA channel interrupts.
+    // 5. Generate DMAC2 channel implementations (LCPU, optional)
+    if let Some(lcpu) = &dma.lcpu {
+        for (dmac_name, controller) in &lcpu.controllers {
+            for i in 1..=controller.channel_total {
+                // DMAC2 channels use IDs 0x80-0x87 (bit7 set to distinguish from DMAC1)
+                let channel_index = 0x80u8 + (i - 1);
+                let channel_name_str = format!("{}_CH{}", dmac_name, i);
+                let channel_ident = format_ident!("{}", channel_name_str);
+
+                implementations.extend(quote! {
+                    dma_channel_impl!(#channel_ident, #channel_index);
+
+                    // Note: DMAC2 interrupts are LCPU-side, not handled here
+                });
+            }
+        }
+    }
+
+    // 6. Generate the function to enable DMA channel interrupts.
     let mut match_arms = TokenStream::new();
     let mut current_channel_id: u8 = 0;
 
@@ -966,7 +1009,7 @@ fn generate_dma_impls(dma: &build_serde::Dma) -> TokenStream {
         for i in 1..=controller.channel_total {
             let channel_name_str = format!("{}_CH{}", dmac_name, i);
             let channel_ident = format_ident!("{}", channel_name_str);
-            
+
             match_arms.extend(quote! {
                 #current_channel_id => {
                     crate::interrupt::typelevel::#channel_ident::set_priority(priority);
@@ -974,6 +1017,20 @@ fn generate_dma_impls(dma: &build_serde::Dma) -> TokenStream {
                 }
             });
             current_channel_id += 1;
+        }
+    }
+
+    // DMAC2 channels (0x80+) - LCPU side, no HCPU interrupt handling
+    if let Some(lcpu) = &dma.lcpu {
+        for (_, controller) in &lcpu.controllers {
+            for i in 1..=controller.channel_total {
+                let channel_id = 0x80u8 + (i - 1);
+                match_arms.extend(quote! {
+                    #channel_id => {
+                        // DMAC2 is LCPU-side, no interrupt setup from HCPU
+                    }
+                });
+            }
         }
     }
 
