@@ -36,6 +36,81 @@ use embedded_io::ReadExactError;
 
 use crate::ipc::{Error as IpcError, IpcQueue, IpcQueueRx, IpcQueueTx};
 
+/// 用于 HCI 写入日志的临时缓冲区
+struct LogBuf {
+    buf: [u8; 264],
+    pos: usize,
+}
+
+impl LogBuf {
+    fn new() -> Self {
+        Self {
+            buf: [0; 264],
+            pos: 0,
+        }
+    }
+    fn as_slice(&self) -> &[u8] {
+        &self.buf[..self.pos]
+    }
+}
+
+impl embedded_io::ErrorType for LogBuf {
+    type Error = embedded_io::ErrorKind;
+}
+
+impl embedded_io::Write for LogBuf {
+    fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        let remaining = self.buf.len() - self.pos;
+        let n = buf.len().min(remaining);
+        self.buf[self.pos..self.pos + n].copy_from_slice(&buf[..n]);
+        self.pos += n;
+        Ok(n)
+    }
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
+/// 包装 IPC RX，记录通过它读取的所有字节
+struct LoggingReader<'a> {
+    inner: &'a mut IpcQueueRx,
+    log: [u8; 64],
+    pos: usize,
+}
+
+impl<'a> LoggingReader<'a> {
+    fn new(inner: &'a mut IpcQueueRx) -> Self {
+        Self {
+            inner,
+            log: [0; 64],
+            pos: 0,
+        }
+    }
+
+    fn dump(&self, prefix: &str) {
+        let end = self.pos.min(64);
+        info!("{} ({} bytes): {:02X}", prefix, self.pos, &self.log[..end]);
+    }
+}
+
+impl embedded_io::ErrorType for LoggingReader<'_> {
+    type Error = IpcError;
+}
+
+impl embedded_io_async::Read for LoggingReader<'_> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        let n = embedded_io_async::Read::read(self.inner, buf).await?;
+        // 记录读到的字节到日志缓冲区
+        let copy_end = (self.pos + n).min(64);
+        if self.pos < 64 {
+            let copy_n = copy_end - self.pos;
+            self.log[self.pos..copy_end].copy_from_slice(&buf[..copy_n]);
+        }
+        self.pos += n;
+        Ok(n)
+    }
+}
+
 /// bt-hci Transport 错误类型。
 #[derive(Debug)]
 pub enum Error {
@@ -144,23 +219,43 @@ impl embedded_io::ErrorType for IpcHciTransport {
 
 impl Transport for IpcHciTransport {
     async fn read<'a>(&self, rx: &'a mut [u8]) -> Result<ControllerToHostPacket<'a>, Self::Error> {
-        debug!("bt_hci: Transport::read called, rx.len={}", rx.len());
         let mut q = self.rx.lock().await;
-        // bt-hci 的 read_hci_async 会解析 H4 格式的 HCI 包
-        ControllerToHostPacket::read_hci_async(&mut *q, rx)
+        // 用 LoggingReader 包装 IPC RX，记录每个接收到的字节
+        let mut logging_rx = LoggingReader::new(&mut *q);
+        let pkt = ControllerToHostPacket::read_hci_async(&mut logging_rx, rx)
             .await
-            .map_err(Error::Read)
+            .map_err(Error::Read)?;
+        // 输出读取到的原始 HCI 字节
+        logging_rx.dump("HCI RX");
+        Ok(pkt)
     }
 
     async fn write<T: HostToControllerPacket>(&self, val: &T) -> Result<(), Self::Error> {
-        debug!("bt_hci: Transport::write called");
+        // ---- HCI TX 日志 ----
+        {
+            let mut log_buf = LogBuf::new();
+            let _ = WithIndicator::new(val).write_hci(&mut log_buf);
+            let s = log_buf.as_slice();
+            let end = s.len().min(64);
+            if s.len() >= 4 && s[0] == 0x01 {
+                // HCI Command: [01] [opcode_lo] [opcode_hi] [param_len] ...
+                let opcode = (s[2] as u16) << 8 | s[1] as u16;
+                info!(
+                    "HCI TX cmd(0x{:04X}) len={}: {:02X}",
+                    opcode,
+                    s.len(),
+                    &s[..end]
+                );
+            } else {
+                info!("HCI TX len={}: {:02X}", s.len(), &s[..end]);
+            }
+        }
+
         let mut q = self.tx.lock().await;
-        // WithIndicator 会在包前添加 H4 packet indicator
         WithIndicator::new(val)
             .write_hci_async(&mut *q)
             .await
             .map_err(Error::Write)?;
-        // 触发 doorbell 通知 LCPU（bt-hci 的 write_hci_async 不会调用 flush）
         q.flush()?;
         Ok(())
     }
