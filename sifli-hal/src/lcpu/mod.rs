@@ -7,7 +7,7 @@
 //! let p = sifli_hal::init(Default::default());
 //! let cfg = LcpuConfig::default();
 //! let lcpu = Lcpu::new(p.LPSYS_AON);
-//! lcpu.power_on(&cfg)?;
+//! lcpu.power_on(&cfg, p.DMAC2_CH8)?;
 //! # Ok(()) }
 //! ```
 
@@ -15,10 +15,14 @@
 pub mod ram;
 pub use ram::LpsysRam;
 
-mod bt_cal;
+mod config;
+pub use config::{ActConfig, EmConfig, RomConfig};
+
+pub mod bt_rf_cal;
 
 use core::fmt;
 
+use crate::dma::Channel;
 use crate::peripherals;
 use crate::syscfg::{self, ChipRevision};
 use crate::Peripheral;
@@ -43,7 +47,7 @@ pub struct LcpuConfig {
     pub firmware: Option<&'static [u8]>,
 
     /// ROM configuration parameters.
-    pub rom: ram::RomConfig,
+    pub rom: RomConfig,
 
     /// Patch data for A3 and earlier (record + code format).
     pub patch_a3: Option<PatchData>,
@@ -63,16 +67,42 @@ impl LcpuConfig {
     pub const fn new() -> Self {
         Self {
             firmware: None,
-            rom: ram::RomConfig {
+            rom: RomConfig {
                 wdt_time: 10,
                 wdt_clk: 32_768,
                 enable_lxt: true,
+                em_config: Some(EmConfig::DEFAULT),
+                act_config: Some(ActConfig::DEFAULT),
             },
             patch_a3: None,
             patch_letter: None,
             skip_frequency_check: false,
             disable_rf_cal: false,
         }
+    }
+
+    /// Skip LPSYS HCLK frequency check during image loading.
+    pub const fn skip_frequency_check(mut self, skip: bool) -> Self {
+        self.skip_frequency_check = skip;
+        self
+    }
+
+    /// Disable RF calibration (normally runs after patch installation).
+    pub const fn disable_rf_cal(mut self, disable: bool) -> Self {
+        self.disable_rf_cal = disable;
+        self
+    }
+
+    /// Set BLE Exchange Memory buffer configuration (Letter Series only).
+    pub const fn em_config(mut self, config: EmConfig) -> Self {
+        self.rom.em_config = Some(config);
+        self
+    }
+
+    /// Set BLE/BT activity configuration (Letter Series only).
+    pub const fn act_config(mut self, config: ActConfig) -> Self {
+        self.rom.act_config = Some(config);
+        self
     }
 }
 
@@ -92,7 +122,7 @@ impl Default for LcpuConfig {
                 list: sf32lb52x_lcpu_data::SF32LB52X_LCPU_PATCH_LETTER_LIST,
                 bin: sf32lb52x_lcpu_data::SF32LB52X_LCPU_PATCH_LETTER_BIN,
             });
-            cfg.disable_rf_cal = true;
+            cfg.disable_rf_cal = false;
         }
 
         cfg
@@ -244,7 +274,7 @@ impl<'d> Lcpu<'d> {
     /// # let mut hci_rx: sifli_hal::ipc::IpcQueueRx = todo!();
     /// use sifli_hal::lcpu::LcpuConfig;
     ///
-    /// lcpu.ble_power_on(&LcpuConfig::default(), &mut hci_rx).await?;
+    /// lcpu.ble_power_on(&LcpuConfig::default(), p.DMAC2_CH8, &mut hci_rx).await?;
     /// // 现在可以安全地发送 HCI 命令
     /// # Ok(())
     /// # }
@@ -252,13 +282,14 @@ impl<'d> Lcpu<'d> {
     pub async fn ble_power_on<R>(
         &self,
         config: &LcpuConfig,
+        dma_ch: impl Peripheral<P = impl Channel>,
         hci_rx: &mut R,
     ) -> Result<(), LcpuError>
     where
         R: embedded_io_async::Read,
     {
         // 1. 执行标准启动流程
-        self.power_on(config)?;
+        self.power_on(config, dma_ch)?;
 
         // 2. 保持 LCPU 唤醒（power_on 结束时允许了睡眠）
         unsafe { rcc::wake_lcpu() };
@@ -270,7 +301,7 @@ impl<'d> Lcpu<'d> {
     }
 
     /// 阻塞版 LCPU 启动流程。
-    pub fn power_on(&self, config: &LcpuConfig) -> Result<(), LcpuError> {
+    pub fn power_on(&self, config: &LcpuConfig, dma_ch: impl Peripheral<P = impl Channel>) -> Result<(), LcpuError> {
         // 1. Wake LCPU。
         debug!("Step 1: Waking up LCPU");
         unsafe {
@@ -320,7 +351,7 @@ impl<'d> Lcpu<'d> {
 
         // 7. Install patches and perform RF calibration (bf0_lcpu_init.c:185).
         debug!("Step 7: Installing patches and RF calibration");
-        install_patch_and_calibrate(config, revision)?;
+        install_patch_and_calibrate(config, revision, dma_ch)?;
 
         // 8. Release LCPU to run (bf0_lcpu_init.c:186).
         debug!("Step 8: Releasing LCPU to run");
@@ -426,19 +457,22 @@ fn ensure_safe_lcpu_frequency() -> Result<u32, LcpuError> {
     Ok(hclk_hz)
 }
 
-/// install patches and perform rf calibration.
+/// Install patches and perform RF calibration.
 ///
-/// selects the appropriate patch data based on chip revision, installs it,
-/// and then runs rf calibration (not yet implemented).
+/// Corresponds to SDK `lcpu_ble_patch_install()` (bf0_lcpu_init.c:179):
+///   1. patch install (A3 or Letter series)
+///   2. bt_rf_cal() — full RF calibration
+///   3. adc_resume() — restore GPADC after OSLO cal
+///   4. memset(EM, 0, 0x5000) — clear Exchange Memory
 ///
-/// # errors
-///
-/// - [`LcpuError::PatchInstall`][]: patch installation failed.
+/// Steps 2-4 are handled inside [`bt_rf_cal::bt_rf_cal`]; step 3 is a TODO
+/// because OSLO calibration (which touches GPADC) is not yet implemented.
 fn install_patch_and_calibrate(
     config: &LcpuConfig,
     revision: ChipRevision,
+    dma_ch: impl Peripheral<P = impl Channel>,
 ) -> Result<(), LcpuError> {
-    // Choose patch data based on revision.
+    // SDK lcpu_ble_patch_install — step 1: patch install
     let patch_data = if revision.is_letter_series() {
         debug!("Using Letter Series patch data");
         config.patch_letter
@@ -447,26 +481,21 @@ fn install_patch_and_calibrate(
         config.patch_a3
     };
 
-    // Install patch if data is provided.
     if let Some(data) = patch_data {
         debug!(
             "Installing patches (list: {} bytes, bin: {} bytes)",
             data.list.len(),
             data.bin.len()
         );
-
-        // Use patch module to install the patch.
         patch::install(revision, data.list, data.bin)?;
     } else {
         warn!("No patch data provided, skipping patch installation");
     }
 
+    // SDK lcpu_ble_patch_install — steps 2-4: bt_rf_cal + adc_resume + EM clear
     if !config.disable_rf_cal {
         debug!("Performing RF calibration");
-
-        // Reference SDK `lcpu_ble_patch_install`, perform BT RF calibration after patch installation.
-        // Here only the minimum necessary subset is implemented: reset RFC and write BT_TXPWR configuration.
-        crate::lcpu::bt_cal::bt_rf_cal(revision);
+        bt_rf_cal::bt_rf_cal(revision, dma_ch);
     } else {
         warn!("RF calibration disabled by config");
     }
@@ -496,6 +525,11 @@ where
     let mut header = [0u8; 3];
     read_exact(rx, &mut header).await?;
 
+    info!(
+        "Warmup header: {:02X} {:02X} {:02X}",
+        header[0], header[1], header[2]
+    );
+
     // 验证是 HCI Event
     if header[0] != 0x04 {
         warn!(
@@ -509,9 +543,14 @@ where
     if param_len > 0 {
         let mut params = [0u8; 255];
         read_exact(rx, &mut params[..param_len]).await?;
+        info!(
+            "Warmup params ({} bytes): {:02X}",
+            param_len,
+            &params[..param_len]
+        );
     }
 
-    debug!("BT warmup event consumed");
+    info!("BT warmup event consumed OK");
     Ok(())
 }
 
