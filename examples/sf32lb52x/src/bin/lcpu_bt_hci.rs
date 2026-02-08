@@ -25,9 +25,10 @@ use bt_hci::cmd::controller_baseband::{Reset, SetEventMask, SetEventMaskPage2};
 use bt_hci::cmd::info::{ReadBdAddr, ReadLocalSupportedFeatures, ReadLocalVersionInformation};
 // LE 命令
 use bt_hci::cmd::le::{
-    LeClearFilterAcceptList, LeReadBufferSize, LeReadFilterAcceptListSize,
-    LeReadLocalSupportedFeatures, LeReadSupportedStates, LeSetAdvData, LeSetAdvEnable,
-    LeSetAdvParams, LeSetEventMask, LeSetRandomAddr, LeSetScanEnable, LeSetScanParams,
+    LeClearFilterAcceptList, LeReadAdvPhysicalChannelTxPower, LeReadBufferSize,
+    LeReadFilterAcceptListSize, LeReadLocalSupportedFeatures, LeReadSupportedStates, LeSetAdvData,
+    LeSetAdvEnable, LeSetAdvParams, LeSetEventMask, LeSetRandomAddr, LeSetScanEnable,
+    LeSetScanParams,
 };
 // 参数类型
 use bt_hci::param::{
@@ -93,6 +94,9 @@ async fn main(spawner: Spawner) {
     let p = sifli_hal::init(Default::default());
     let rev = syscfg::read_idr().revision();
 
+    // 等待 probe-rs attach
+    // Timer::after(Duration::from_secs(2)).await;
+
     info!("=== LCPU BT HCI Commands Test ===");
     info!("Testing commands required by trouble-host");
 
@@ -114,7 +118,10 @@ async fn main(spawner: Spawner) {
 
     // 3. BLE 启动
     let lcpu = Lcpu::new(p.LPSYS_AON);
-    if let Err(e) = lcpu.ble_power_on(&LcpuConfig::default(), &mut rx).await {
+    if let Err(e) = lcpu
+        .ble_power_on(&LcpuConfig::default(), p.DMAC2_CH8, &mut rx)
+        .await
+    {
         error!("LCPU ble_power_on failed: {:?}", e);
         loop {
             Timer::after_secs(1).await;
@@ -218,6 +225,15 @@ async fn main(spawner: Spawner) {
     info!("");
     info!("=== Phase 3: LE Parameters ===");
 
+    // LE Read Advertising Channel TX Power
+    if let Some(ret) = exec_cmd!(
+        controller,
+        LeReadAdvPhysicalChannelTxPower::new(),
+        "LeReadAdvPhysicalChannelTxPower"
+    ) {
+        info!("  Adv TX Power: {} dBm", ret);
+    }
+
     // LE Read Buffer Size
     if let Some(ret) = exec_cmd!(controller, LeReadBufferSize::new(), "LeReadBufferSize") {
         let acl_len = ret.le_acl_data_packet_length;
@@ -301,11 +317,7 @@ async fn main(spawner: Spawner) {
     adv_data[4] = 0x09; // type: Complete Local Name
     adv_data[5..12].copy_from_slice(b"SF32-BT"); // "SF32-BT"
 
-    exec_cmd!(
-        controller,
-        LeSetAdvData::new(12, adv_data),
-        "LeSetAdvData"
-    );
+    exec_cmd!(controller, LeSetAdvData::new(12, adv_data), "LeSetAdvData");
 
     // LE Set Advertising Enable (enable)
     exec_cmd!(

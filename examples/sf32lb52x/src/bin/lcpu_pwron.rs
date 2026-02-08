@@ -22,7 +22,7 @@ async fn main(_spawner: Spawner) {
 
     let cfg = LcpuConfig::default();
 
-    match lcpu.power_on(&cfg) {
+    match lcpu.power_on(&cfg, p.DMAC2_CH8) {
         Ok(()) => info!("LCPU power-on succeeded"),
         Err(e) => {
             warn!("LCPU power-on failed: {:?}", e);
