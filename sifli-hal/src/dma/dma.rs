@@ -18,6 +18,20 @@ use crate::{interrupt, pac, peripherals};
 pub use pac::dmac::vals::Pl as Priority;
 pub use pac::dmac::vals::Dir as Dir;
 
+/// DMA address increment mode.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Increment {
+    /// DMA will not increment either of the addresses.
+    None,
+    /// DMA will increment the peripheral address.
+    Peripheral,
+    /// DMA will increment the memory address.
+    Memory,
+    /// DMA will increment both peripheral and memory addresses simultaneously.
+    Both,
+}
+
 pub(crate) struct ChannelInfo {
     pub(crate) dma: pac::dmac::Dmac,
     pub(crate) num: usize,
@@ -127,12 +141,13 @@ impl AnyChannel {
 
     unsafe fn configure(
         &self,
-        request: Request,
+        request: u8,
         dir: Dir,
         peri_addr: *const u32,
         mem_addr: *mut u32,
         mem_len: usize,
-        incr_mem: bool,
+        incr: Increment,
+        mem2mem: bool,
         mem_size: WordSize,
         peri_size: WordSize,
         options: TransferOptions,
@@ -168,36 +183,43 @@ impl AnyChannel {
 
         assert!(ndtr > 0 && ndtr <= 0xFFFF);
 
-        
-        r.cpar(channel_num).write_value(pac::dmac::regs::Cpar(peri_addr as _));
-        
-        // r.cm0ar(channel_num).write_value(pac::dmac::regs::Cm0ar(0x2000_0100 as _));
-        // 0x1200_00AA -> 0x6200_00AA
-        let mem_addr = if mem_addr as u32 >= 0x2000_0000 {
-            mem_addr as u32
+        // In M2M mode CPAR is also a memory address, apply remap for flash addresses
+        let peri_addr = if mem2mem {
+            Self::remap_addr(peri_addr as u32)
         } else {
-            mem_addr as u32  + 0x5000_0000
+            peri_addr as u32
         };
-        info!("mem_addr {:X}", (mem_addr as u32 + 0x5000_0000));
-        r.cm0ar(channel_num).write_value(pac::dmac::regs::Cm0ar(mem_addr));
+        r.cpar(channel_num).write_value(pac::dmac::regs::Cpar(peri_addr));
+
+        r.cm0ar(channel_num).write_value(pac::dmac::regs::Cm0ar(Self::remap_addr(mem_addr as u32)));
         r.cndtr(channel_num).write_value(pac::dmac::regs::Cndtr(ndtr as _));
         r.cselr(channel_num / 4)
-            .modify(|w| w.set_cs(channel_num % 4, request as u8));
+            .modify(|w| w.set_cs(channel_num % 4, request));
         r.ccr(channel_num).write(|w| {
             w.set_dir(dir.into());
             w.set_msize(mem_size.into());
             w.set_psize(peri_size.into());
             w.set_pl(options.priority.into());
-            w.set_minc(incr_mem);
-            w.set_pinc(false);
+            match incr {
+                Increment::None => { w.set_minc(false); w.set_pinc(false); }
+                Increment::Peripheral => { w.set_minc(false); w.set_pinc(true); }
+                Increment::Memory => { w.set_minc(true); w.set_pinc(false); }
+                Increment::Both => { w.set_minc(true); w.set_pinc(true); }
+            }
             w.set_teie(true);
             w.set_htie(options.half_transfer_ir);
             w.set_tcie(options.complete_transfer_ir);
             w.set_circ(options.circular);
-            w.set_en(false); // don't start yet
+            w.set_mem2mem(mem2mem);
+            w.set_en(false);
         });
 
         crate::_generated::enable_dma_channel_interrupt_priority(self.id, options.interrupt_priority);
+    }
+
+    /// Remap address for DMA bus access (flash addresses < 0x2000_0000 need offset).
+    fn remap_addr(addr: u32) -> u32 {
+        if addr >= 0x2000_0000 { addr } else { addr + 0x5000_0000 }
     }
 
     fn start(&self) {
@@ -266,6 +288,7 @@ impl AnyChannel {
             Poll::Pending
         }
     }
+
 }
 
 /// DMA transfer.
@@ -303,7 +326,7 @@ impl<'a> Transfer<'a> {
             peri_addr as *const u32,
             buf as *mut MW as *mut u32,
             buf.len(),
-            true,
+            Increment::Memory,
             MW::size(),
             PW::size(),
             options,
@@ -338,7 +361,7 @@ impl<'a> Transfer<'a> {
             peri_addr as *const u32,
             buf as *const MW as *mut u32,
             buf.len(),
-            true,
+            Increment::Memory,
             MW::size(),
             PW::size(),
             options,
@@ -363,11 +386,46 @@ impl<'a> Transfer<'a> {
             peri_addr as *const u32,
             repeated as *const W as *mut u32,
             count,
-            false,
+            Increment::None,
             W::size(),
             W::size(),
             options,
         )
+    }
+
+    /// Create a new memory-to-memory DMA transfer.
+    ///
+    /// Copies data from `src` to `dst`. Both slices must have the same length.
+    /// The transfer starts immediately without waiting for a peripheral request.
+    ///
+    /// # Safety
+    /// - `src` and `dst` must not overlap.
+    /// - Both buffers must remain valid for the lifetime of the transfer.
+    pub unsafe fn new_transfer<W: Word>(
+        channel: impl Peripheral<P = impl Channel> + 'a,
+        src: &'a [W],
+        dst: &'a mut [W],
+        options: TransferOptions,
+    ) -> Self {
+        into_ref!(channel);
+        assert!(src.len() == dst.len());
+
+        let channel: PeripheralRef<'a, AnyChannel> = channel.map_into();
+        // M2M with DIR=0: CPAR=source, CM0AR=destination
+        channel.configure(
+            0,
+            Dir::PeripheralToMemory,
+            src.as_ptr() as *const u32,
+            dst.as_mut_ptr() as *mut u32,
+            src.len(),
+            Increment::Both,
+            true,
+            W::size(),
+            W::size(),
+            options,
+        );
+        channel.start();
+        Self { channel }
     }
 
     unsafe fn new_inner(
@@ -377,7 +435,7 @@ impl<'a> Transfer<'a> {
         peri_addr: *const u32,
         mem_addr: *mut u32,
         mem_len: usize,
-        incr_mem: bool,
+        incr: Increment,
         mem_size: WordSize,
         peri_size: WordSize,
         options: TransferOptions,
@@ -385,7 +443,7 @@ impl<'a> Transfer<'a> {
         assert!(mem_len > 0 && mem_len <= 0xFFFF);
 
         channel.configure(
-            request, dir, peri_addr, mem_addr, mem_len, incr_mem, mem_size, peri_size, options,
+            request as u8, dir, peri_addr, mem_addr, mem_len, incr, false, mem_size, peri_size, options,
         );
         channel.start();
         Self { channel }
@@ -505,12 +563,13 @@ impl<'a, W: Word> ReadableRingBuffer<'a, W> {
         options.circular = true;
 
         channel.configure(
-            request,
+            request as u8,
             dir,
             peri_addr as *mut u32,
             buffer_ptr as *mut u32,
             len,
-            true,
+            Increment::Memory,
+            false,
             data_size,
             data_size,
             options,
@@ -658,12 +717,13 @@ impl<'a, W: Word> WritableRingBuffer<'a, W> {
         options.circular = true;
 
         channel.configure(
-            request,
+            request as u8,
             dir,
             peri_addr as *mut u32,
             buffer_ptr as *mut u32,
             len,
-            true,
+            Increment::Memory,
+            false,
             data_size,
             data_size,
             options,
