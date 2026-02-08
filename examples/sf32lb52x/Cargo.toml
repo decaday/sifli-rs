@@ -46,7 +46,7 @@ usbd-hid = { version = "0.9", features = ["defmt"] }
 static_cell = "2.1.1"
 portable-atomic = "1.11.1"
 bt-hci = { version = "0.7", features = ["defmt"] }
-trouble-host = { version = "0.5.1", features = ["defmt", "peripheral"] }
+trouble-host = { git = "https://github.com/Ic-arbon/trouble.git", rev = "1fef5f2", features = ["defmt", "peripheral"] }
 
 # Patch embassy crates to use embedded-io 0.7 compatible versions
 [patch.crates-io]
