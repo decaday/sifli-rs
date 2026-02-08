@@ -3,7 +3,11 @@ use crate::pac::{EFUSEC, PMUC};
 /// HAL_EFUSE_BANK_SIZE
 const BANK_SIZE: u8 = 32;
 
+/// Bank 1 bit offset (for RF calibration data)
+const BANK1_BIT_OFFSET: u16 = 256;
+
 static mut FACTORY_CFG_VBK_LDO: Option<FactoryCfgVbkLdo> = None;
+static mut RF_CAL_PARAMS: Option<RfCalParams> = None;
 
 /// Read EFUSE data into provided buffer
 /// 
@@ -191,4 +195,76 @@ impl FactoryCfgVbkLdo {
     pub fn get_hpsys_vout_ref2(&self) -> u8 {
         self.hpsys_ldo_vout2
     }
+}
+
+/// RF calibration parameters from eFUSE Bank 1
+///
+/// These parameters are factory-programmed and used for Bluetooth RF calibration.
+/// See SDK `bt_rf_get_absolute_pwr_cal()` and `bt_rf_get_tmxcap_sel_efuse()`.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct RfCalParams {
+    /// EDR calibration flag (efuse_data[15] bit 5)
+    pub edr_cal_flag: bool,
+    /// PA BM calibration value (efuse_data[15] bit 6-7)
+    pub pa_bm_cal: u8,
+    /// DAC LSB count calibration (efuse_data[16] bit 0-1)
+    pub dac_lsb_cnt_cal: u8,
+    /// TMXCAP selection eFUSE flag (efuse_data[16] bit 2)
+    pub tmxcap_sel_flag: bool,
+    /// TMXCAP selection values for channels 7-8 (efuse_data[16] bit 3-6)
+    pub tmxcap_sel_7_8: u8,
+    /// TMXCAP selection value for channel 0 (efuse_data[16] bit 7 + efuse_data[17] bit 0-2)
+    pub tmxcap_sel_0: u8,
+}
+
+impl RfCalParams {
+    /// Check if RF calibration data is valid (has been programmed)
+    pub fn is_valid(&self) -> bool {
+        // If EDR cal flag or TMXCAP flag is set, data is valid
+        self.edr_cal_flag || self.tmxcap_sel_flag
+    }
+}
+
+/// Get RF calibration parameters from eFUSE (cached)
+///
+/// Reads RF calibration parameters from eFUSE Bank 1. The result is cached
+/// after the first successful read.
+///
+/// # Returns
+/// * `Some(&RfCalParams)` - If read successful
+/// * `None` - If read failed
+pub fn get_rf_cal_params() -> Option<&'static RfCalParams> {
+    unsafe {
+        if (&*&raw const RF_CAL_PARAMS).is_none() {
+            RF_CAL_PARAMS = read_rf_cal_params();
+        }
+        (&*&raw const RF_CAL_PARAMS).as_ref()
+    }
+}
+
+/// Read RF calibration parameters from eFUSE Bank 1
+///
+/// Based on SDK `bt_rf_get_absolute_pwr_cal()` and `bt_rf_get_tmxcap_sel_efuse()`.
+fn read_rf_cal_params() -> Option<RfCalParams> {
+    let mut data = [0u8; 20];
+    if read(BANK1_BIT_OFFSET, &mut data, 20).is_err() {
+        return None;
+    }
+
+    let params = RfCalParams {
+        // efuse_data[15] bit 5
+        edr_cal_flag: (data[15] & 0x20) != 0,
+        // efuse_data[15] bit 6-7
+        pa_bm_cal: (data[15] & 0xc0) >> 6,
+        // efuse_data[16] bit 0-1
+        dac_lsb_cnt_cal: data[16] & 0x03,
+        // efuse_data[16] bit 2
+        tmxcap_sel_flag: (data[16] & 0x04) != 0,
+        // efuse_data[16] bit 3-6
+        tmxcap_sel_7_8: (data[16] & 0x78) >> 3,
+        // efuse_data[16] bit 7 + efuse_data[17] bit 0-2
+        tmxcap_sel_0: ((data[16] & 0x80) >> 7) | ((data[17] & 0x07) << 1),
+    };
+
+    Some(params)
 }

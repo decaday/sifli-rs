@@ -1,8 +1,6 @@
-//! LCPU memory management: ROM configuration and firmware image loading.
-//!
-//! This module unifies LCPU memory operations, including configuring ROM parameters
-//! and loading firmware images into LPSYS RAM.
+//! LCPU memory management: ROM configuration write and firmware image loading.
 
+use super::config::{ActConfig, EmConfig, RomConfig};
 use crate::syscfg::ChipRevision;
 use core::{mem, ptr};
 
@@ -32,6 +30,7 @@ pub struct RomControlBlock {
 
     // Padding to reach 0xAC (172).
     // 28 (0x1C) to 172 (0xAC) = 144 bytes.
+    // Contains: is_soft_cvsd(4) + em_buf(82) + pad(2) + act_config(12) + ke_mem(44)
     pub _pad2: [u8; 144], // 0x1C..0xAC (28..172)
 
     /// Letter Series (A4/B4) extended configuration (BT/BLE).
@@ -72,31 +71,6 @@ impl Default for BtRomConfig {
     fn default() -> Self {
         // Zeroed by default
         unsafe { mem::zeroed() }
-    }
-}
-
-//=============================================================================
-// User Configuration
-//=============================================================================
-
-/// User-configurable ROM parameters.
-#[derive(Debug, Clone, Copy)]
-pub struct RomConfig {
-    /// Watchdog timeout (in seconds, default 10).
-    pub wdt_time: u32,
-    /// Watchdog clock frequency (Hz, default 32768).
-    pub wdt_clk: u16,
-    /// Enable external low-speed crystal (default true).
-    pub enable_lxt: bool,
-}
-
-impl Default for RomConfig {
-    fn default() -> Self {
-        Self {
-            wdt_time: 10,
-            wdt_clk: 32_768,
-            enable_lxt: true,
-        }
     }
 }
 
@@ -324,6 +298,18 @@ pub fn rom_config(revision: ChipRevision, config: &RomConfig) -> Result<(), Erro
 
             // Write BT config struct
             ptr::write_volatile(&mut block.bt_config, bt_cfg);
+
+            // EM buffer configuration
+            if let Some(ref em) = config.em_config {
+                let dst = (base + EmConfig::ROM_OFFSET) as *mut EmConfig;
+                ptr::write_volatile(dst, *em);
+            }
+
+            // Activity configuration
+            if let Some(ref act) = config.act_config {
+                let dst = (base + ActConfig::ROM_OFFSET) as *mut ActConfig;
+                ptr::write_volatile(dst, *act);
+            }
         }
     }
 
