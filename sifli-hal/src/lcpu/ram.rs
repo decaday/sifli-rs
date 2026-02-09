@@ -1,7 +1,7 @@
 //! LCPU memory management: ROM configuration write and firmware image loading.
 
 use super::config::{ActConfig, EmConfig, RomConfig};
-use crate::syscfg::ChipRevision;
+use crate::syscfg;
 use core::{mem, ptr};
 
 //=============================================================================
@@ -92,8 +92,8 @@ impl RomControlBlock {
     pub const MAGIC: u32 = 0x4545_7878;
 
     /// Get the configuration base address for the given chip revision.
-    pub fn address(revision: ChipRevision) -> usize {
-        if revision.is_letter_series() {
+    pub fn address() -> usize {
+        if syscfg::read_idr().revision().is_letter_series() {
             Self::ADDR_LETTER
         } else {
             Self::ADDR_A3
@@ -204,8 +204,8 @@ impl IpcRegion {
 
     /// Select LCPU -> HCPU buffer start by revision.
     #[inline]
-    pub fn lcpu_to_hcpu_start(rev: ChipRevision) -> usize {
-        if rev.is_letter_series() {
+    pub fn lcpu_to_hcpu_start() -> usize {
+        if syscfg::read_idr().revision().is_letter_series() {
             Self::LCPU_TO_HCPU_CH1_REV_B
         } else {
             Self::LCPU_TO_HCPU_CH1_A3
@@ -214,8 +214,8 @@ impl IpcRegion {
 
     /// Select LCPU -> HCPU CH2 buffer start by revision.
     #[inline]
-    pub fn lcpu_to_hcpu_ch2_start(rev: ChipRevision) -> usize {
-        if rev.is_letter_series() {
+    pub fn lcpu_to_hcpu_ch2_start() -> usize {
+        if syscfg::read_idr().revision().is_letter_series() {
             Self::LCPU_TO_HCPU_CH2_REV_B
         } else {
             Self::LCPU_TO_HCPU_CH2_A3
@@ -247,9 +247,9 @@ pub enum Error {
 /// Configure LCPU ROM parameters.
 ///
 /// Replaces `lcpu_rom_config`.
-pub fn rom_config(revision: ChipRevision, config: &RomConfig) -> Result<(), Error> {
-    let base = RomControlBlock::address(revision);
-    let is_letter = revision.is_letter_series();
+pub fn rom_config(config: &RomConfig, lld_prog_delay: u8) -> Result<(), Error> {
+    let base = RomControlBlock::address();
+    let is_letter = syscfg::read_idr().revision().is_letter_series();
 
     // Calculate size to clear/write.
     // A3: 0x40 (64 bytes)
@@ -290,7 +290,8 @@ pub fn rom_config(revision: ChipRevision, config: &RomConfig) -> Result<(), Erro
 
             // BT Config
             let bt_cfg = BtRomConfig {
-                bit_valid: (1 << 10) | (1 << 6), // From SDK
+                bit_valid: (1 << 10) | (1 << 6) | (1 << 2), // bit2=lld_prog_delay, bit6=xtal, bit10=fpga
+                lld_prog_delay,
                 is_fpga: 0,
                 default_xtal_enabled: config.enable_lxt as u8,
                 ..Default::default()
@@ -319,11 +320,12 @@ pub fn rom_config(revision: ChipRevision, config: &RomConfig) -> Result<(), Erro
 /// Install LCPU firmware image.
 ///
 /// Replaces `lcpu_img::install`.
-pub fn img_install(revision: ChipRevision, image: &[u8]) -> Result<(), Error> {
+pub fn img_install(image: &[u8]) -> Result<(), Error> {
     if image.is_empty() {
         return Err(Error::EmptyImage);
     }
 
+    let revision = syscfg::read_idr().revision();
     if !revision.is_valid() {
         return Err(Error::InvalidRevision {
             revid: revision.revid(),
@@ -365,11 +367,11 @@ pub fn img_install(revision: ChipRevision, image: &[u8]) -> Result<(), Error> {
 /// Corresponds to `HAL_LCPU_CONFIG_set(HAL_LCPU_CONFIG_BT_TX_PWR, ...)` in SDK,
 /// writes to `bt_txpwr` field at offset 20.
 /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/lcpu_config_type_int.h`.
-pub fn set_bt_tx_power(revision: ChipRevision, tx_pwr: u32) {
+pub fn set_bt_tx_power(tx_pwr: u32) {
     // LCPU_CONFIG_BT_TXPWR_ROM_OFFSET = 20
     const BT_TXPWR_OFFSET: usize = 20;
 
-    let base = RomControlBlock::address(revision);
+    let base = RomControlBlock::address();
     let addr = base + BT_TXPWR_OFFSET;
 
     unsafe {

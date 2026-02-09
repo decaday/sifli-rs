@@ -4,6 +4,42 @@
 //! and BLE/BT activity limits. These are written to the ROM configuration
 //! area before LCPU startup (Letter Series only for EM/ACT).
 
+/// BLE controller runtime parameters.
+///
+/// Applied after LCPU boot to configure BLE scheduling and timing.
+/// SDK equivalent: parameters set by `ble_xtal_less_init()` in `bluetooth.c:79`.
+#[derive(Debug, Clone, Copy)]
+pub struct ControllerConfig {
+    /// Link Layer Driver programming delay (625us slots).
+    ///
+    /// Controls how far in advance the BLE scheduler programs radio events.
+    /// SDK: `rom_config_set_lld_prog_delay(3)` for SF32LB52x.
+    /// A value of 0 causes connection failures due to missed radio events.
+    pub lld_prog_delay: u8,
+
+    /// Whether external 32kHz crystal (LXT) is enabled for BLE sleep timing.
+    ///
+    /// SDK: `rom_config_set_default_xtal_enabled(0)` when no LXT on board.
+    /// If `true` but no LXT present, BLE scheduler misses all events → 0x3E disconnect.
+    pub xtal_enabled: bool,
+
+    /// RC oscillator cycle count for BLE sleep timing.
+    ///
+    /// SDK: `rom_config_set_default_rc_cycle(HAL_RC_CAL_GetLPCycle_ex())`.
+    /// Typical value: 20 (SDK default when using RC10K).
+    pub rc_cycle: u8,
+}
+
+impl Default for ControllerConfig {
+    fn default() -> Self {
+        Self {
+            lld_prog_delay: 3,
+            xtal_enabled: false,
+            rc_cycle: 20,
+        }
+    }
+}
+
 /// User-configurable ROM parameters.
 #[derive(Debug, Clone, Copy)]
 pub struct RomConfig {

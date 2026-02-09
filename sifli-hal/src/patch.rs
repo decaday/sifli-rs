@@ -12,15 +12,14 @@
 //!
 //! # Example
 //! ```no_run
-//! use sifli_hal::{patch, syscfg};
+//! use sifli_hal::patch;
 //!
-//! let idr = syscfg::read_idr();
-//! patch::install(idr.revision(), &PATCH_LIST_BYTES, &PATCH_BIN_BYTES)?;
+//! patch::install(&PATCH_LIST_BYTES, &PATCH_BIN_BYTES)?;
 //! ```
 
 use crate::lcpu::ram::PatchRegion;
 use crate::pac;
-use crate::syscfg::ChipRevision;
+use crate::syscfg;
 
 //=============================================================================
 // Constants
@@ -237,12 +236,11 @@ pub fn hal_patch_get_enabled() -> u32 {
 ///
 /// # Example
 /// ```no_run
-/// use sifli_hal::{patch, syscfg};
+/// use sifli_hal::patch;
 ///
-/// let idr = syscfg::read_idr();
-/// patch::install(idr.revision(), &PATCH_LIST_BYTES, &PATCH_BIN_BYTES)?;
+/// patch::install(&PATCH_LIST_BYTES, &PATCH_BIN_BYTES)?;
 /// ```
-pub fn install(revision: ChipRevision, list: &[u8], bin: &[u8]) -> Result<(), Error> {
+pub fn install(list: &[u8], bin: &[u8]) -> Result<(), Error> {
     // Parameter validation
     if list.is_empty() {
         return Err(Error::EmptyRecord);
@@ -250,6 +248,8 @@ pub fn install(revision: ChipRevision, list: &[u8], bin: &[u8]) -> Result<(), Er
     if bin.is_empty() {
         return Err(Error::EmptyCode);
     }
+
+    let revision = syscfg::read_idr().revision();
 
     if !revision.is_valid() {
         return Err(Error::InvalidRevision {

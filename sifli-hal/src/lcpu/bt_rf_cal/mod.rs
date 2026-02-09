@@ -20,7 +20,6 @@ use crate::dma::Channel;
 use crate::efuse::{get_rf_cal_params, RfCalParams};
 use crate::pac::{BT_PHY, BT_RFC};
 use crate::rcc::{lp_rfc_reset_asserted, set_lp_rfc_reset};
-use crate::syscfg::ChipRevision;
 use crate::Peripheral;
 
 /// RFC SRAM base address
@@ -290,7 +289,7 @@ fn rf_dump_checkpoint(name: &str) {
 ///   ├─ adc_resume()                  // re-init GPADC after OSLO touched it
 ///   └─ memset(EM, 0, 0x5000)         // clear Exchange Memory
 /// ```
-pub fn bt_rf_cal(revision: ChipRevision, dma_ch: impl Peripheral<P = impl Channel>) {
+pub fn bt_rf_cal(dma_ch: impl Peripheral<P = impl Channel>) {
     // TODO: bt_is_in_BQB_mode() check (SDK:5453) — always assumes non-BQB
     // SDK:5461 — bt_rf_cal_index(): compute s_cal_enable from power range
     let (max_pwr, min_pwr, init_pwr, _is_bqb) = default_tx_power_params();
@@ -389,7 +388,7 @@ pub fn bt_rf_cal(revision: ChipRevision, dma_ch: impl Peripheral<P = impl Channe
 
     // SDK:5488-5492 — save TX power params to LCPU ROM config
     let tx_pwr = encode_tx_power(max_pwr, min_pwr, init_pwr, _is_bqb);
-    crate::lcpu::ram::set_bt_tx_power(revision, tx_pwr);
+    crate::lcpu::ram::set_bt_tx_power(tx_pwr);
 
     // Store TXDC cal tables into RFC SRAM.
     // SDK does this inside bt_rfc_txdc_cal; we do it after opt_cal for cleaner ordering.

@@ -24,7 +24,7 @@ use trouble_host::prelude::*;
 
 use sifli_hal::bt_hci::IpcHciTransport;
 use sifli_hal::lcpu::{Lcpu, LcpuConfig};
-use sifli_hal::{bind_interrupts, ipc, syscfg};
+use sifli_hal::{bind_interrupts, ipc};
 
 bind_interrupts!(struct Irqs {
     MAILBOX2_CH1 => ipc::InterruptHandler;
@@ -33,7 +33,6 @@ bind_interrupts!(struct Irqs {
 #[embassy_executor::main]
 async fn main(_spawner: embassy_executor::Spawner) {
     let p = sifli_hal::init(Default::default());
-    let rev = syscfg::read_idr().revision();
 
     // 等待 probe-rs attach
     // Timer::after(Duration::from_secs(2)).await;
@@ -42,7 +41,7 @@ async fn main(_spawner: embassy_executor::Spawner) {
 
     // 1. 创建 IPC driver 和 HCI queue
     let mut ipc_driver = ipc::Ipc::new(p.MAILBOX1_CH1, Irqs, ipc::Config::default());
-    let queue = match ipc_driver.open_queue(ipc::QueueConfig::qid0_hci(rev)) {
+    let queue = match ipc_driver.open_queue(ipc::QueueConfig::qid0_hci()) {
         Ok(q) => q,
         Err(e) => {
             error!("open_queue failed: {:?}", e);

@@ -72,7 +72,7 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 use crate::interrupt::{self, InterruptExt};
 use crate::lcpu::ram::IpcRegion;
-use crate::{peripherals, rcc, syscfg};
+use crate::{peripherals, rcc};
 
 use circular_buf::{CircularBuf, CircularBufMutPtrExt, CircularBufPtrExt};
 
@@ -143,11 +143,11 @@ pub struct QueueConfig {
 
 impl QueueConfig {
     /// qid0：SDK 蓝牙 HCI 通道，使用 BUF1 缓冲区。
-    pub fn qid0_hci(rev: syscfg::ChipRevision) -> Self {
+    pub fn qid0_hci() -> Self {
         let tx = IpcRegion::HCPU_TO_LCPU_CH1;
         Self {
             qid: 0,
-            rx_buf_addr: IpcRegion::lcpu_to_hcpu_start(rev),
+            rx_buf_addr: IpcRegion::lcpu_to_hcpu_start(),
             tx_buf_addr: tx,
             tx_buf_addr_alias: IpcRegion::hcpu_to_lcpu_addr(tx),
             tx_buf_size: IpcRegion::BUF_SIZE,
@@ -155,11 +155,11 @@ impl QueueConfig {
     }
 
     /// qid1：SDK 系统 IPC 通道（data-service 等），使用 BUF2 缓冲区。
-    pub fn qid1_system(rev: syscfg::ChipRevision) -> Self {
+    pub fn qid1_system() -> Self {
         let tx = IpcRegion::HCPU_TO_LCPU_CH2;
         Self {
             qid: 1,
-            rx_buf_addr: IpcRegion::lcpu_to_hcpu_ch2_start(rev),
+            rx_buf_addr: IpcRegion::lcpu_to_hcpu_ch2_start(),
             tx_buf_addr: tx,
             tx_buf_addr_alias: IpcRegion::hcpu_to_lcpu_addr(tx),
             tx_buf_size: IpcRegion::BUF_SIZE,
@@ -246,6 +246,11 @@ fn handle_rx_irq(qid: u8) {
     let len = if rx_ptr == 0 {
         0
     } else {
+        // LCPU 写入 circular buffer 数据后触发 mailbox 中断。
+        // Acquire load 只保证 rx_ptr 指针可见，不保证 LCPU 对 buffer
+        // 内容（write_idx_mirror 等字段）的写入已刷新到共享 SRAM。
+        // 显式 SeqCst fence 确保后续 volatile read 能看到最新数据。
+        fence(Ordering::SeqCst);
         unsafe { (rx_ptr as *const CircularBuf).data_len() }
     };
 
@@ -269,9 +274,8 @@ fn handle_rx_irq(qid: u8) {
 /// });
 ///
 /// let p = sifli_hal::init(Default::default());
-/// let rev = sifli_hal::syscfg::read_idr().revision();
 /// let mut ipc = ipc::Ipc::new(p.MAILBOX1_CH1, Irqs, ipc::Config::default());
-/// let mut q = ipc.open_queue(ipc::QueueConfig::qid0_hci(rev)).unwrap();
+/// let mut q = ipc.open_queue(ipc::QueueConfig::qid0_hci()).unwrap();
 /// ```
 pub struct Ipc<'d> {
     _tx_ch: PeripheralRef<'d, peripherals::MAILBOX1_CH1>,
@@ -515,9 +519,11 @@ impl IpcQueueRx {
         }
 
         poll_fn(|cx| {
+            if st.rx_len.load(Ordering::Acquire) > 0 {
+                return Poll::Ready(());
+            }
             st.rx_waker.register(cx.waker());
             fence(Ordering::SeqCst);
-
             if st.rx_len.load(Ordering::Acquire) > 0 {
                 Poll::Ready(())
             } else {

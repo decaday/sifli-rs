@@ -15,9 +15,8 @@
 //!
 //! async fn example() {
 //!     let p = sifli_hal::init(Default::default());
-//!     let rev = sifli_hal::syscfg::read_idr().revision();
 //!     let mut ipc_driver = ipc::Ipc::new(p.MAILBOX1_CH1, Irqs, ipc::Config::default());
-//!     let queue = ipc_driver.open_queue(ipc::QueueConfig::qid0_hci(rev)).unwrap();
+//!     let queue = ipc_driver.open_queue(ipc::QueueConfig::qid0_hci()).unwrap();
 //!
 //!     let transport = IpcHciTransport::new(queue);
 //!     let controller: ExternalController<_, 4> = ExternalController::new(transport);

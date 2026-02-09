@@ -16,7 +16,9 @@ pub mod ram;
 pub use ram::LpsysRam;
 
 mod config;
-pub use config::{ActConfig, EmConfig, RomConfig};
+pub use config::{ActConfig, ControllerConfig, EmConfig, RomConfig};
+
+pub(crate) mod controller;
 
 pub mod bt_rf_cal;
 
@@ -24,7 +26,7 @@ use core::fmt;
 
 use crate::dma::Channel;
 use crate::peripherals;
-use crate::syscfg::{self, ChipRevision};
+use crate::syscfg;
 use crate::Peripheral;
 use crate::{lpaon, patch, rcc};
 
@@ -60,6 +62,10 @@ pub struct LcpuConfig {
 
     /// Disable RF calibration (normally runs after patch installation).
     pub disable_rf_cal: bool,
+
+    /// BLE controller runtime parameters (applied after boot).
+    /// SDK equivalent: `ble_xtal_less_init()` in `bluetooth.c`.
+    pub controller: ControllerConfig,
 }
 
 impl LcpuConfig {
@@ -78,6 +84,11 @@ impl LcpuConfig {
             patch_letter: None,
             skip_frequency_check: false,
             disable_rf_cal: false,
+            controller: ControllerConfig {
+                lld_prog_delay: 3,
+                xtal_enabled: false,
+                rc_cycle: 20,
+            },
         }
     }
 
@@ -297,6 +308,17 @@ impl<'d> Lcpu<'d> {
         // 3. 读取并丢弃 warmup 事件
         consume_warmup_event(hci_rx).await?;
 
+        // 4. 控制器初始化（SDK: bluetooth_init → ble_xtal_less_init + SetMacFreq）
+        controller::apply(&config.controller);
+
+        // 5. 禁止 BLE 睡眠（SDK: bt_sleep_control(0) 写 LPSYS_AON.RESERVE0=1）
+        //
+        // SDK 有完整的 ble_standby_sleep_after_handler() 在每次唤醒后重配 MAC 时钟和 PTC。
+        // 我们还没实现该回调，所以暂时禁止 BLE 控制器进入睡眠，避免唤醒后 MAC 时钟丢失
+        // 导致连接事件错过（0x3E Synchronization Timeout）。
+        crate::pac::LPSYS_AON.reserve0().write(|w| w.set_data(1));
+        debug!("BLE sleep disabled (LPSYS_AON.RESERVE0=1)");
+
         Ok(())
     }
 
@@ -314,9 +336,7 @@ impl<'d> Lcpu<'d> {
 
         // 3. Configure ROM parameters (bf0_lcpu_init.c:168).
         debug!("Step 3: Configuring ROM parameters");
-        let idr = syscfg::read_idr();
-        let revision = idr.revision();
-        ram::rom_config(revision, &config.rom)?;
+        ram::rom_config(&config.rom, config.controller.lld_prog_delay)?;
 
         // 4. Enforce frequency limit while loading (bf0_lcpu_init.c:170-176).
         // If frequency exceeds 24MHz, automatically reduce it.
@@ -329,11 +349,12 @@ impl<'d> Lcpu<'d> {
         };
 
         // 5. Install image for A3 and earlier (bf0_lcpu_init.c:178-182).
-        if !revision.is_letter_series() {
+        let is_letter = syscfg::read_idr().revision().is_letter_series();
+        if !is_letter {
             debug!("Step 5: Installing LCPU firmware image (A3/earlier)");
 
             if let Some(firmware) = config.firmware {
-                ram::img_install(revision, firmware)?;
+                ram::img_install(firmware)?;
             } else {
                 error!("Firmware required for A3 and earlier revisions");
                 return Err(LcpuError::FirmwareMissing);
@@ -351,7 +372,7 @@ impl<'d> Lcpu<'d> {
 
         // 7. Install patches and perform RF calibration (bf0_lcpu_init.c:185).
         debug!("Step 7: Installing patches and RF calibration");
-        install_patch_and_calibrate(config, revision, dma_ch)?;
+        install_patch_and_calibrate(config, dma_ch)?;
 
         // 8. Release LCPU to run (bf0_lcpu_init.c:186).
         debug!("Step 8: Releasing LCPU to run");
@@ -469,11 +490,10 @@ fn ensure_safe_lcpu_frequency() -> Result<u32, LcpuError> {
 /// because OSLO calibration (which touches GPADC) is not yet implemented.
 fn install_patch_and_calibrate(
     config: &LcpuConfig,
-    revision: ChipRevision,
     dma_ch: impl Peripheral<P = impl Channel>,
 ) -> Result<(), LcpuError> {
     // SDK lcpu_ble_patch_install — step 1: patch install
-    let patch_data = if revision.is_letter_series() {
+    let patch_data = if syscfg::read_idr().revision().is_letter_series() {
         debug!("Using Letter Series patch data");
         config.patch_letter
     } else {
@@ -487,7 +507,7 @@ fn install_patch_and_calibrate(
             data.list.len(),
             data.bin.len()
         );
-        patch::install(revision, data.list, data.bin)?;
+        patch::install(data.list, data.bin)?;
     } else {
         warn!("No patch data provided, skipping patch installation");
     }
@@ -495,7 +515,7 @@ fn install_patch_and_calibrate(
     // SDK lcpu_ble_patch_install — steps 2-4: bt_rf_cal + adc_resume + EM clear
     if !config.disable_rf_cal {
         debug!("Performing RF calibration");
-        bt_rf_cal::bt_rf_cal(revision, dma_ch);
+        bt_rf_cal::bt_rf_cal(dma_ch);
     } else {
         warn!("RF calibration disabled by config");
     }
