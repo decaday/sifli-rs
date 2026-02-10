@@ -19,6 +19,7 @@ mod config;
 pub use config::{ActConfig, ControllerConfig, EmConfig, RomConfig};
 
 pub(crate) mod controller;
+mod nvds;
 
 pub mod bt_rf_cal;
 
@@ -66,6 +67,12 @@ pub struct LcpuConfig {
     /// BLE controller runtime parameters (applied after boot).
     /// SDK equivalent: `ble_xtal_less_init()` in `bluetooth.c`.
     pub controller: ControllerConfig,
+
+    /// Public BD address written to NVDS shared memory.
+    ///
+    /// LCPU ROM reads this during initialization.
+    /// Default: `[0x12, 0x34, 0x56, 0x78, 0xAB, 0xCD]` (SDK default).
+    pub bd_addr: [u8; 6],
 }
 
 impl LcpuConfig {
@@ -89,6 +96,7 @@ impl LcpuConfig {
                 xtal_enabled: false,
                 rc_cycle: 20,
             },
+            bd_addr: [0x12, 0x34, 0x56, 0x78, 0xAB, 0xCD],
         }
     }
 
@@ -299,6 +307,13 @@ impl<'d> Lcpu<'d> {
     where
         R: embedded_io_async::Read,
     {
+        // 0. 写入 NVDS 到 LCPU 共享内存（SDK: bt_stack_nvds_init）
+        //    必须在 LCPU 启动前完成，ROM 读取此数据初始化蓝牙参数。
+        //    先 wake LCPU 以确保共享内存可访问。
+        unsafe { rcc::wake_lcpu() };
+        nvds::write_default(&config.bd_addr, config.rom.enable_lxt);
+        unsafe { rcc::cancel_lcpu_active_request() };
+
         // 1. 执行标准启动流程
         self.power_on(config, dma_ch)?;
 
@@ -308,16 +323,9 @@ impl<'d> Lcpu<'d> {
         // 3. 读取并丢弃 warmup 事件
         consume_warmup_event(hci_rx).await?;
 
-        // 4. 控制器初始化（SDK: bluetooth_init → ble_xtal_less_init + SetMacFreq）
-        controller::apply(&config.controller);
-
-        // 5. 禁止 BLE 睡眠（SDK: bt_sleep_control(0) 写 LPSYS_AON.RESERVE0=1）
-        //
-        // SDK 有完整的 ble_standby_sleep_after_handler() 在每次唤醒后重配 MAC 时钟和 PTC。
-        // 我们还没实现该回调，所以暂时禁止 BLE 控制器进入睡眠，避免唤醒后 MAC 时钟丢失
-        // 导致连接事件错过（0x3E Synchronization Timeout）。
-        crate::pac::LPSYS_AON.reserve0().write(|w| w.set_data(1));
-        debug!("BLE sleep disabled (LPSYS_AON.RESERVE0=1)");
+        // 4. 控制器初始化（SDK: bluetooth_init）
+        //    包含：sleep timing + MAC clock + CFO tracking + 禁止 BLE 睡眠
+        controller::init(&config.controller);
 
         Ok(())
     }

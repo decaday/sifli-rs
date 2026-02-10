@@ -290,7 +290,8 @@ pub fn rom_config(config: &RomConfig, lld_prog_delay: u8) -> Result<(), Error> {
 
             // BT Config
             let bt_cfg = BtRomConfig {
-                bit_valid: (1 << 10) | (1 << 6) | (1 << 2), // bit2=lld_prog_delay, bit6=xtal, bit10=fpga
+                bit_valid: (1 << 10) | (1 << 6) | (1 << 2) | (1 << 1), // bit1=controller_enable, bit2=lld_prog_delay, bit6=xtal, bit10=fpga
+                controller_enable_bit: 0x03, // BLE(1) | BT(2)
                 lld_prog_delay,
                 is_fpga: 0,
                 default_xtal_enabled: config.enable_lxt as u8,
