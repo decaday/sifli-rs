@@ -515,6 +515,13 @@ pub struct ConfigBuilder {
     /// After calibration, HRC48 can be used as accurate clock source for low-power modes.
     pub hrc48_calibrate: bool,
 
+    /// Whether USB clock is required (must be exactly 60MHz).
+    ///
+    /// When `true` (default), `check()` validates that the USB clock source can be
+    /// divided to exactly 60MHz, and `init()` configures the USB clock divider.
+    /// Set to `false` if USB is not used, allowing more flexible clock configurations.
+    pub usb: bool,
+
     // pub audpll: Option<AudPll>,
     // Clock mux configuration
     pub mux: ClockMux,
@@ -536,6 +543,7 @@ impl Default for ConfigBuilder {
                 stg: DllStage::Mul12,
             }),
             hrc48_calibrate: true, // Calibrate HRC48 by default for better accuracy
+            usb: true,
             mux: ClockMux::default(),
         }
     }
@@ -557,6 +565,7 @@ impl ConfigBuilder {
                 stg: DllStage::Mul12,
             }),
             hrc48_calibrate: true,
+            usb: true,
             mux: ClockMux::new(),
         }
     }
@@ -593,6 +602,11 @@ impl ConfigBuilder {
 
     pub const fn with_hrc48_calibrate(mut self, cal: bool) -> Self {
         self.hrc48_calibrate = cal;
+        self
+    }
+
+    pub const fn with_usb(mut self, usb: bool) -> Self {
+        self.usb = usb;
         self
     }
 
@@ -650,15 +664,14 @@ impl ConfigBuilder {
             _ => {}
         }
 
-        // Check USB clock source consistency
-        if let Usbsel::Dll2 = self.mux.usbsel {
-            if self.dll2.is_none() {
-                ::core::panic!("USB clock source is set to DLL2, but dll2 is None");
+        // Check USB clock constraints (only when USB is enabled)
+        if self.usb {
+            if let Usbsel::Dll2 = self.mux.usbsel {
+                if self.dll2.is_none() {
+                    ::core::panic!("USB clock source is set to DLL2, but dll2 is None");
+                }
             }
-        }
 
-        // Check USB clock can be divided to 60MHz
-        {
             let usb_source_freq = match self.mux.usbsel {
                 Usbsel::Sysclk => self.get_sysclk_freq_hz(),
                 Usbsel::Dll2 => match self.dll2 {
@@ -691,6 +704,27 @@ impl ConfigBuilder {
         let hclk_hz = self.get_hclk_freq_hz();
         if hclk_hz > 240_000_000 {
             ::core::panic!("HCLK frequency exceeds maximum DVFS limit (240 MHz)");
+        }
+
+        // Check PCLK frequency limits based on DVFS mode
+        let pclk1_hz = hclk_hz >> (self.pdiv1 as u32);
+        let pclk2_hz = hclk_hz >> (self.pdiv2 as u32);
+        if hclk_hz > 48_000_000 {
+            // S mode (enhanced): pclk1 ≤ 120 MHz, pclk2 ≤ 7.5 MHz
+            if pclk1_hz > 120_000_000 {
+                ::core::panic!("PCLK1 exceeds S-mode limit (120 MHz), increase pdiv1");
+            }
+            if pclk2_hz > 7_500_000 {
+                ::core::panic!("PCLK2 exceeds S-mode limit (7.5 MHz), increase pdiv2");
+            }
+        } else {
+            // D mode (basic): pclk1 ≤ 48 MHz, pclk2 ≤ 6 MHz
+            if pclk1_hz > 48_000_000 {
+                ::core::panic!("PCLK1 exceeds D-mode limit (48 MHz), increase pdiv1");
+            }
+            if pclk2_hz > 6_000_000 {
+                ::core::panic!("PCLK2 exceeds D-mode limit (6 MHz), increase pdiv2");
+            }
         }
 
         // Check DLL1 frequency range if configured
@@ -1001,26 +1035,26 @@ pub(crate) unsafe fn init(config: Config) {
 
         // other MUX configuration
 
-        // Configure USB clock according to config.mux.usbsel
-        // USB PHY requires exactly 60MHz
-        const USB_TARGET_FREQ: u32 = 60_000_000;
-        let usb_source_freq = match config.mux.usbsel {
-            Usbsel::Sysclk => config.get_sysclk_freq(),
-            Usbsel::Dll2 => {
-                if let Some(dll2) = config.dll2 {
-                    DLL_STG_STEP * dll2.stg
-                } else {
-                    // Fallback to reading from hardware
-                    panic!("DLL2 is not configured, cannot configure USB clock");
+        // Configure USB clock only when USB is enabled
+        if config.usb {
+            const USB_TARGET_FREQ: u32 = 60_000_000;
+            let usb_source_freq = match config.mux.usbsel {
+                Usbsel::Sysclk => config.get_sysclk_freq(),
+                Usbsel::Dll2 => {
+                    if let Some(dll2) = config.dll2 {
+                        DLL_STG_STEP * dll2.stg
+                    } else {
+                        panic!("DLL2 is not configured, cannot configure USB clock");
+                    }
                 }
-            }
-        };
+            };
 
-        let usb_div = (usb_source_freq.0 / USB_TARGET_FREQ) as u8;
-        HPSYS_RCC.usbcr().modify(|w| w.set_div(usb_div));
-        HPSYS_RCC.csr().modify(|w| {
-            w.set_sel_usbc(config.mux.usbsel);
-        });
+            let usb_div = (usb_source_freq.0 / USB_TARGET_FREQ) as u8;
+            HPSYS_RCC.usbcr().modify(|w| w.set_div(usb_div));
+            HPSYS_RCC.csr().modify(|w| {
+                w.set_sel_usbc(config.mux.usbsel);
+            });
+        }
 
         // Configure peripheral clock according to config.mux.perisel
         HPSYS_RCC.csr().modify(|w| {
