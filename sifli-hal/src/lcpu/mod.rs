@@ -34,7 +34,13 @@ use crate::{lpaon, patch, rcc};
 
 #[cfg(feature = "sf32lb52x-lcpu")]
 mod sf32lb52x_lcpu_data {
-    include!(concat!(env!("OUT_DIR"), "/sf32lb52x_lcpu.rs"));
+    pub const FIRMWARE: &[u8] = include_bytes!("../../data/sf32lb52x/lcpu/lcpu_firmware.bin");
+    pub const PATCH_A3_LIST: &[u8] = include_bytes!("../../data/sf32lb52x/lcpu/patch_a3_list.bin");
+    pub const PATCH_A3_BIN: &[u8] = include_bytes!("../../data/sf32lb52x/lcpu/patch_a3_bin.bin");
+    pub const PATCH_LETTER_LIST: &[u8] =
+        include_bytes!("../../data/sf32lb52x/lcpu/patch_letter_list.bin");
+    pub const PATCH_LETTER_BIN: &[u8] =
+        include_bytes!("../../data/sf32lb52x/lcpu/patch_letter_bin.bin");
 }
 
 //=============================================================================
@@ -98,14 +104,14 @@ impl Default for LcpuConfig {
 
         #[cfg(feature = "sf32lb52x-lcpu")]
         {
-            cfg.boot.firmware = Some(sf32lb52x_lcpu_data::SF32LB52X_LCPU_FIRMWARE);
+            cfg.boot.firmware = Some(sf32lb52x_lcpu_data::FIRMWARE);
             cfg.boot.patch_a3 = Some(PatchData {
-                list: sf32lb52x_lcpu_data::SF32LB52X_LCPU_PATCH_A3_LIST,
-                bin: sf32lb52x_lcpu_data::SF32LB52X_LCPU_PATCH_A3_BIN,
+                list: sf32lb52x_lcpu_data::PATCH_A3_LIST,
+                bin: sf32lb52x_lcpu_data::PATCH_A3_BIN,
             });
             cfg.boot.patch_letter = Some(PatchData {
-                list: sf32lb52x_lcpu_data::SF32LB52X_LCPU_PATCH_LETTER_LIST,
-                bin: sf32lb52x_lcpu_data::SF32LB52X_LCPU_PATCH_LETTER_BIN,
+                list: sf32lb52x_lcpu_data::PATCH_LETTER_LIST,
+                bin: sf32lb52x_lcpu_data::PATCH_LETTER_BIN,
             });
             cfg.boot.disable_rf_cal = false;
         }
