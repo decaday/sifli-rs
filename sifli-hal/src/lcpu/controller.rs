@@ -135,31 +135,31 @@ fn configure_sleep_timing(config: &ControllerConfig) {
         );
 
         unsafe {
-            // Write fields (mirrors SDK rom_config_set_* functions).
-            let base = cfg_ptr as *mut u8;
+            // Write fields via struct references (mirrors SDK rom_config_set_* functions).
+            let cfg = &mut *cfg_ptr;
 
-            // controller_enable_bit (offset +8) = BLE(1) | BT(2) = 3
+            // controller_enable_bit = BLE(1) | BT(2) = 3
             // SDK: rom_config_set_controller_enabled(BT_CONTROLLER_ENABLE_MASK | BLE_CONTROLLER_ENABLE_MASK)
-            core::ptr::write_volatile(base.add(8), 0x03u8);
+            core::ptr::write_volatile(&mut cfg.controller_enable_bit, 0x03);
 
-            // lld_prog_delay (offset +9)
-            core::ptr::write_volatile(base.add(9), config.lld_prog_delay);
+            // lld_prog_delay
+            core::ptr::write_volatile(&mut cfg.lld_prog_delay, config.lld_prog_delay);
 
-            // default_sleep_mode (offset +11) = 0 (no sleep)
-            core::ptr::write_volatile(base.add(11), 0);
+            // default_sleep_mode = 0 (no sleep)
+            core::ptr::write_volatile(&mut cfg.default_sleep_mode, 0);
 
-            // default_sleep_enabled (offset +12) = 0 (disable sleep)
+            // default_sleep_enabled = 0 (disable sleep)
             // Without bluetooth_pm_init(), sleep would cause missed connection events.
-            core::ptr::write_volatile(base.add(12), 0);
+            core::ptr::write_volatile(&mut cfg.default_sleep_enabled, 0);
 
-            // default_xtal_enabled (offset +13)
-            core::ptr::write_volatile(base.add(13), config.xtal_enabled as u8);
+            // default_xtal_enabled
+            core::ptr::write_volatile(&mut cfg.default_xtal_enabled, config.xtal_enabled as u8);
 
-            // default_rc_cycle (offset +14)
-            core::ptr::write_volatile(base.add(14), config.rc_cycle);
+            // default_rc_cycle
+            core::ptr::write_volatile(&mut cfg.default_rc_cycle, config.rc_cycle);
 
             // Update bit_valid — tell ROM these fields are explicitly configured.
-            let old_valid = core::ptr::read_volatile(cfg_ptr as *const u32);
+            let old_valid = core::ptr::read_volatile(&cfg.bit_valid);
             let new_valid = old_valid
                 | bit::CONTROLLER_ENABLE
                 | bit::LLD_PROG_DELAY
@@ -167,7 +167,7 @@ fn configure_sleep_timing(config: &ControllerConfig) {
                 | bit::SLEEP_ENABLED
                 | bit::XTAL_ENABLED
                 | bit::RC_CYCLE;
-            core::ptr::write_volatile(cfg_ptr as *mut u32, new_valid);
+            core::ptr::write_volatile(&mut cfg.bit_valid, new_valid);
         }
 
         // Verify.

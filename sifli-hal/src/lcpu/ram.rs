@@ -48,7 +48,7 @@ pub struct RomControlBlock {
 
 /// BT/BLE specific configuration (A4+).
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Default, Debug, Clone, Copy)]
 pub struct BtRomConfig {
     pub bit_valid: u32,
     pub max_sleep_time: u32,
@@ -65,13 +65,6 @@ pub struct BtRomConfig {
     pub en_inq_filter: u8,
     pub support_3m: u8,
     pub sco_cfg: u8,
-}
-
-impl Default for BtRomConfig {
-    fn default() -> Self {
-        // Zeroed by default
-        unsafe { mem::zeroed() }
-    }
 }
 
 //=============================================================================
