@@ -35,6 +35,15 @@ pub fn read(bit_offset: u16, data: &mut [u8], size: usize) -> Result<usize, ()> 
 
     crate::cortex_m_blocking_delay_us(20);
 
+    // Configure TIMR timing parameters (cycles = time × freq).
+    // See SDK HAL_EFUSE_Init() in bf0_hal_efuse.c.
+    let freq = crate::rcc::clocks().pclk.to_hertz().unwrap().0 as u64;
+    EFUSEC.timr().write(|w| {
+        w.set_thrck((freq * 500 / 1_000_000_000 + 1) as u8); // >500ns
+        w.set_thpck((freq * 20 / 1_000_000_000 + 1) as u8);  // >20ns
+        w.set_tckhp((freq * 10 / 1_000_000) as u16);          // ~10us
+    });
+
     // Configure EFUSE control register
     EFUSEC.cr().modify(|w| w.set_banksel(bank));
     EFUSEC.cr().modify(|w| w.set_en(true));
@@ -49,7 +58,7 @@ pub fn read(bit_offset: u16, data: &mut [u8], size: usize) -> Result<usize, ()> 
     }
 
     // Clear done flag
-    EFUSEC.sr().modify(|w| w.set_done(false));
+    EFUSEC.sr().write(|w| w.set_done(true));
 
     // Read data
     unsafe {
@@ -60,7 +69,7 @@ pub fn read(bit_offset: u16, data: &mut [u8], size: usize) -> Result<usize, ()> 
         let word_size = size >> 2;
         for i in 0..word_size {
             let val = rd_reg.read().0;
-            rd_reg = rd_reg.add(4);
+            rd_reg = rd_reg.add(1);
             let offset = i * 4;
             data[offset] = val as u8;
             data[offset + 1] = (val >> 8) as u8;
@@ -69,7 +78,7 @@ pub fn read(bit_offset: u16, data: &mut [u8], size: usize) -> Result<usize, ()> 
         }
     }
     // Restore original VOUT value
-    PMUC.hpsys_vout().modify(| w| w.set_vout(org));
+    PMUC.hpsys_vout().write(|w| w.set_vout(org));
 
     Ok(size)
 }
@@ -104,7 +113,7 @@ pub fn get_factory_cfg_id_vbuck(pvdd_v18_en: bool) -> Option<&'static FactoryCfg
 /// Factory configuration ID VBUCK implementation
 fn read_factory_cfg_id_vbuck(pvdd_v18_en: bool) -> Option<FactoryCfgVbkLdo> {
     let mut data = [0u8; 32];
-    if read(0, &mut data, 32).is_err() {
+    if read(BANK1_BIT_OFFSET, &mut data, 32).is_err() {
         return None;
     }
 
@@ -133,8 +142,6 @@ fn read_factory_cfg_id_vbuck(pvdd_v18_en: bool) -> Option<FactoryCfgVbkLdo> {
             cfg.hpsys_ldo_vout = (data[0] & 0xf0) >> 4;
             cfg.lpsys_ldo_vout = data[1] & 0xf;
             cfg.vret_trim = (data[1] & 0xf0) >> 4;
-            //cfg->buck_vos_trim2 = data[13] & 7;
-            //cfg->buck_vos_polar2 = (data[13] & 8) >> 3;
             cfg.hpsys_ldo_vout2 = (data[13] & 0xf0) >> 4;
             cfg.lpsys_ldo_vout2 = data[14] & 0xf;
         }

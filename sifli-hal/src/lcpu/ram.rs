@@ -133,9 +133,14 @@ impl PatchRegion {
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:334`
     pub const LETTER_BUF_START: usize = 0x2040_5000;
 
-    /// Patch code start address (after 12-byte header).
+    /// Patch code start address (after 12-byte header) — HCPU-visible (secure alias).
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:335`
     pub const LETTER_CODE_START: usize = 0x2040_500C;
+
+    /// Patch code start address as seen by LCPU (non-secure alias).
+    /// LCPU cannot access the 0x2040_xxxx range; it uses 0x0040_xxxx.
+    /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:336`
+    pub const LETTER_CODE_START_LCPU: usize = 0x0040_500C;
 
     /// Patch buffer size.
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:337`
@@ -247,7 +252,7 @@ pub enum Error {
 /// Configure LCPU ROM parameters.
 ///
 /// Replaces `lcpu_rom_config`.
-pub fn rom_config(config: &RomConfig, lld_prog_delay: u8) -> Result<(), Error> {
+pub fn rom_config(config: &RomConfig, ctrl: &super::config::ControllerConfig) -> Result<(), Error> {
     let base = RomControlBlock::address();
     let is_letter = syscfg::read_idr().revision().is_letter_series();
 
@@ -288,13 +293,25 @@ pub fn rom_config(config: &RomConfig, lld_prog_delay: u8) -> Result<(), Error> {
                 RomControlBlock::HCPU2LCPU_MB_CH1_BUF_START_ADDR as u32,
             );
 
-            // BT Config
+            // BT Config — must include sleep bits so ROM disables sleep
+            // (without SLEEP_MODE/SLEEP_ENABLED in bit_valid, ROM uses internal
+            // defaults which may enable sleep, causing 0x3E connection timeouts
+            // since we lack ble_standby_sleep_after_handler).
             let bt_cfg = BtRomConfig {
-                bit_valid: (1 << 10) | (1 << 6) | (1 << 2) | (1 << 1), // bit1=controller_enable, bit2=lld_prog_delay, bit6=xtal, bit10=fpga
+                bit_valid: (1 << 10)  // is_fpga
+                    | (1 << 7)        // rc_cycle
+                    | (1 << 6)        // xtal_enabled
+                    | (1 << 5)        // sleep_enabled
+                    | (1 << 4)        // sleep_mode
+                    | (1 << 2)        // lld_prog_delay
+                    | (1 << 1),       // controller_enable
                 controller_enable_bit: 0x03, // BLE(1) | BT(2)
-                lld_prog_delay,
+                lld_prog_delay: ctrl.lld_prog_delay,
+                default_sleep_mode: 0,       // No sleep
+                default_sleep_enabled: 0,    // Disable sleep
+                default_xtal_enabled: ctrl.xtal_enabled as u8,
+                default_rc_cycle: ctrl.rc_cycle,
                 is_fpga: 0,
-                default_xtal_enabled: config.enable_lxt as u8,
                 ..Default::default()
             };
 

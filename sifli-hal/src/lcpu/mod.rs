@@ -344,7 +344,7 @@ impl<'d> Lcpu<'d> {
 
         // 3. Configure ROM parameters (bf0_lcpu_init.c:168).
         debug!("Step 3: Configuring ROM parameters");
-        ram::rom_config(&config.rom, config.controller.lld_prog_delay)?;
+        ram::rom_config(&config.rom, &config.controller)?;
 
         // 4. Enforce frequency limit while loading (bf0_lcpu_init.c:170-176).
         // If frequency exceeds 24MHz, automatically reduce it.

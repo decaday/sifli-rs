@@ -33,9 +33,6 @@ mod addr {
     /// `rwip_prog_delay` address for A3 revision.
     pub const RWIP_PROG_DELAY_A3: *mut u8 = 0x2040_FA94 as _;
 
-    /// `rwip_prog_delay` address for Letter Series (A4/B4).
-    pub const RWIP_PROG_DELAY_LETTER: *mut u8 = 0x2041_6338 as _;
-
     /// `g_rom_config` base address for A3 revision (21 bytes).
     pub const G_ROM_CONFIG_A3: *mut BtRomConfig = 0x2040_E48C as _;
 }
@@ -102,34 +99,29 @@ pub(crate) fn init(config: &ControllerConfig) {
 ///
 /// SDK equivalent: `ble_xtal_less_init()` in `bluetooth.c:79-101`.
 ///
-/// Writes `rwip_prog_delay` runtime variable and `g_rom_config` fields
+/// For A3: writes `rwip_prog_delay` runtime variable and `g_rom_config` fields
 /// that control BLE scheduler timing (sleep mode, XTAL, RC cycle).
+/// For Letter Series: skipped entirely — ROM reads these from `RomControlBlock.bt_config`.
 fn configure_sleep_timing(config: &ControllerConfig) {
     let is_letter = syscfg::read_idr().revision().is_letter_series();
 
-    // ── rwip_prog_delay (runtime cache) ──
+    // ── A3 only: rwip_prog_delay + g_rom_config ──
     //
-    // Direct runtime variable read by sch_arb_insert(), sch_arb_prog_timer(), etc.
-    let rwip_addr = if is_letter {
-        addr::RWIP_PROG_DELAY_LETTER
-    } else {
-        addr::RWIP_PROG_DELAY_A3
-    };
-
-    unsafe {
-        core::ptr::write_volatile(rwip_addr, config.lld_prog_delay);
-    }
-
-    debug!(
-        "Controller init: rwip_prog_delay={} written to 0x{:08X}",
-        config.lld_prog_delay, rwip_addr as usize
-    );
-
-    // ── g_rom_config fields + bit_valid (A3 only) ──
-    //
-    // For A3: write directly to g_rom_config in LCPU BSS and update bit_valid.
-    // For Letter Series: already configured via RomControlBlock.bt_config in ram::rom_config().
+    // For A3: write rwip_prog_delay runtime variable and g_rom_config fields directly.
+    // For Letter Series: rwip_prog_delay is set by ROM from RomControlBlock.bt_config
+    // (configured in ram::rom_config() with LLD_PROG_DELAY bit), and g_rom_config
+    // is also handled by ROM. Writing to the A3 address (0x2040_FA94) on Letter Series
+    // is harmless but pointless, while the SF32LB56x address (0x2041_6338) is out of
+    // bounds on SF32LB52x Letter Series and would cause a bus fault.
     if !is_letter {
+        // rwip_prog_delay: direct runtime variable read by sch_arb_insert(), etc.
+        unsafe {
+            core::ptr::write_volatile(addr::RWIP_PROG_DELAY_A3, config.lld_prog_delay);
+        }
+        debug!(
+            "Controller init: rwip_prog_delay={} written to 0x{:08X}",
+            config.lld_prog_delay, addr::RWIP_PROG_DELAY_A3 as usize
+        );
         let cfg_ptr = addr::G_ROM_CONFIG_A3;
 
         // Dump before modification.
@@ -191,6 +183,8 @@ fn configure_sleep_timing(config: &ControllerConfig) {
             rom_cfg.default_xtal_enabled,
             rom_cfg.default_rc_cycle,
         );
+    } else {
+        debug!("Controller init: Letter Series, rwip_prog_delay set via RomControlBlock");
     }
 }
 

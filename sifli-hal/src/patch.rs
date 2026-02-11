@@ -96,18 +96,6 @@ pub struct PatchEntry {
     pub data: u32,
 }
 
-/// Patch record header in memory.
-///
-/// The record starts with a magic tag, followed by size, then entries.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-struct PatchRecordHeader {
-    /// Magic tag (should be `PATCH_TAG`).
-    tag: u32,
-    /// Size in bytes of the entry array (not including header).
-    size_bytes: u32,
-}
-
 //=============================================================================
 // Hardware Operations
 //=============================================================================
@@ -131,35 +119,38 @@ struct PatchRecordHeader {
 /// # Reference
 /// `SiFli-SDK/drivers/hal/bf0_hal_patch.c:HAL_PATCH_install()`
 pub fn hal_patch_install(record_addr: usize) -> Result<u32, Error> {
-    // SAFETY: Caller guarantees record_addr points to valid memory
-    let header = unsafe { *(record_addr as *const PatchRecordHeader) };
+    // Read header using unaligned access — the record may reside in a &[u8]
+    // slice without alignment guarantee (unlike SDK's `const unsigned int[]`).
+    let tag = unsafe { core::ptr::read_unaligned(record_addr as *const u32) };
+    let size_bytes =
+        unsafe { core::ptr::read_unaligned((record_addr + 4) as *const u32) };
 
     // Verify magic tag
-    if header.tag != PatchRegion::A3_MAGIC {
+    if tag != PatchRegion::A3_MAGIC {
         debug!(
             "Patch record invalid: tag=0x{:08X}, expected=0x{:08X}",
-            header.tag,
+            tag,
             PatchRegion::A3_MAGIC
         );
         return Err(Error::InvalidRecordMagic {
-            actual: header.tag,
+            actual: tag,
             expected: PatchRegion::A3_MAGIC,
         });
     }
 
     // Calculate number of entries
-    let entry_count = header.size_bytes as usize / core::mem::size_of::<PatchEntry>();
+    let entry_count = size_bytes as usize / core::mem::size_of::<PatchEntry>();
     if entry_count > MAX_PATCH_ENTRIES {
         return Err(Error::TooManyEntries { count: entry_count });
     }
 
     debug!(
         "HAL_PATCH_install: {} entries from 0x{:08X} (size_bytes={})",
-        entry_count, record_addr, header.size_bytes
+        entry_count, record_addr, size_bytes
     );
 
-    // Get pointer to entries (after header)
-    let entries_addr = record_addr + core::mem::size_of::<PatchRecordHeader>();
+    // Get pointer to entries (after 8-byte header)
+    let entries_addr = record_addr + 8;
 
     // Install entries into hardware
     let enabled = hal_patch_install_entries(entries_addr, entry_count)?;
@@ -179,6 +170,11 @@ fn hal_patch_install_entries(entries_addr: usize, count: usize) -> Result<u32, E
         return Err(Error::TooManyEntries { count });
     }
 
+    // Ensure PATCH peripheral clock is enabled (LPSYS_RCC ENR1 bit 4).
+    // The clock may be disabled after LCPU reset. Without it, AHB bus access
+    // to the PATCH registers will stall indefinitely.
+    pac::LPSYS_RCC.esr1().write(|w| w.set_patch(true));
+
     let patch = pac::PATCH;
     let mut enabled_mask: u32 = 0;
 
@@ -187,19 +183,21 @@ fn hal_patch_install_entries(entries_addr: usize, count: usize) -> Result<u32, E
     debug!("  PATCH CER cleared");
 
     for i in 0..count {
-        // SAFETY: entries_addr + i * size is within the valid record area
-        let entry = unsafe {
-            *((entries_addr + i * core::mem::size_of::<PatchEntry>()) as *const PatchEntry)
-        };
+        // Read entry using unaligned access (data may not be 4-byte aligned).
+        let entry_offset = entries_addr + i * core::mem::size_of::<PatchEntry>();
+        let break_addr =
+            unsafe { core::ptr::read_unaligned(entry_offset as *const u32) };
+        let data =
+            unsafe { core::ptr::read_unaligned((entry_offset + 4) as *const u32) };
 
-        let addr_masked = entry.break_addr & PATCH_ADDR_MASK;
+        let addr_masked = break_addr & PATCH_ADDR_MASK;
 
         // Write breakpoint address to channel register (bits 18:2)
         patch.ch(i).write(|w| w.set_addr(addr_masked >> 2));
 
         // Select channel and write replacement data
         patch.csr().write(|w| w.set_cs(1 << i));
-        patch.cdr().write(|w| w.set_data(entry.data));
+        patch.cdr().write(|w| w.set_data(data));
 
         enabled_mask |= 1 << i;
     }
@@ -384,9 +382,9 @@ fn install_letter(list: &[u8], bin: &[u8]) -> Result<(), Error> {
     // Step 1: Write PACH header (12 bytes) - for ROM to find patch code entry point.
     // Reference: lcpu_patch_rev_b.c:60-66
     let header = [
-        PatchRegion::LETTER_MAGIC,                 // magic: "PACH"
-        PatchRegion::LETTER_ENTRY_COUNT,           // entry_count (fixed)
-        PatchRegion::LETTER_CODE_START as u32 + 1, // code_addr (Thumb bit)
+        PatchRegion::LETTER_MAGIC,                      // magic: "PACH"
+        PatchRegion::LETTER_ENTRY_COUNT,                 // entry_count (fixed)
+        PatchRegion::LETTER_CODE_START_LCPU as u32 + 1,  // code_addr (LCPU address + Thumb bit)
     ];
 
     let header_addr = PatchRegion::LETTER_BUF_START;
