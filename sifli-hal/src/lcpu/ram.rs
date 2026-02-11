@@ -80,13 +80,13 @@ impl Default for BtRomConfig {
 
 impl RomControlBlock {
     /// Base address for A3 and earlier (fixed region).
-    pub const ADDR_A3: usize = 0x2040_FDC0;
+    pub const ADDR_A3: usize = super::memory_map::a3::ROM_CONFIG_BASE;
 
     /// Base address for Letter Series (A4/B4) (Mailbox CH2).
-    pub const ADDR_LETTER: usize = 0x2040_2A00;
+    pub const ADDR_LETTER: usize = super::memory_map::letter::ROM_CONFIG_BASE;
 
     /// HCPU->LCPU Mailbox CH1 buffer start (TX queue).
-    pub const HCPU2LCPU_MB_CH1_BUF_START_ADDR: usize = 0x2007_FE00;
+    pub const HCPU2LCPU_MB_CH1_BUF_START_ADDR: usize = super::memory_map::shared::HCPU2LCPU_MB_CH1;
 
     /// Magic number expected by ROM.
     pub const MAGIC: u32 = 0x4545_7878;
@@ -116,12 +116,12 @@ impl PatchRegion {
 
     /// Patch code start address for A3.
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:328`
-    pub const A3_CODE_START: usize = 0x2040_6000;
+    pub const A3_CODE_START: usize = super::memory_map::a3::PATCH_CODE_START;
 
     /// Patch record area address for A3.
     /// Located at the last 256 bytes of the patch region.
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:331` (`LCPU_PATCH_RECORD_ADDR`)
-    pub const A3_RECORD_ADDR: usize = 0x2040_7F00;
+    pub const A3_RECORD_ADDR: usize = super::memory_map::a3::PATCH_RECORD_ADDR;
 
     /// Total patch area size for A3.
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:300`
@@ -131,16 +131,16 @@ impl PatchRegion {
 
     /// Patch buffer start address.
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:334`
-    pub const LETTER_BUF_START: usize = 0x2040_5000;
+    pub const LETTER_BUF_START: usize = super::memory_map::letter::PATCH_BUF_START;
 
     /// Patch code start address (after 12-byte header) — HCPU-visible (secure alias).
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:335`
-    pub const LETTER_CODE_START: usize = 0x2040_500C;
+    pub const LETTER_CODE_START: usize = super::memory_map::letter::PATCH_CODE_START;
 
     /// Patch code start address as seen by LCPU (non-secure alias).
     /// LCPU cannot access the 0x2040_xxxx range; it uses 0x0040_xxxx.
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:336`
-    pub const LETTER_CODE_START_LCPU: usize = 0x0040_500C;
+    pub const LETTER_CODE_START_LCPU: usize = super::memory_map::letter::PATCH_CODE_START_LCPU;
 
     /// Patch buffer size.
     /// Reference: `SiFli-SDK/drivers/cmsis/sf32lb52x/mem_map.h:337`
@@ -164,7 +164,7 @@ pub struct LpsysRam;
 
 impl LpsysRam {
     /// LPSYS RAM base address (HCPU view).
-    pub const BASE: usize = 0x2040_0000;
+    pub const BASE: usize = super::memory_map::shared::LPSYS_RAM_BASE;
 
     /// LPSYS RAM size for A3 and earlier revisions (24KB).
     pub const SIZE: usize = 24 * 1024;
@@ -184,22 +184,22 @@ impl IpcRegion {
     /// HCPU -> LCPU (CH1) TX buffer start, HCPU view.
     pub const HCPU_TO_LCPU_CH1: usize = RomControlBlock::HCPU2LCPU_MB_CH1_BUF_START_ADDR;
     /// HCPU -> LCPU (CH2) TX buffer start, HCPU view.
-    pub const HCPU_TO_LCPU_CH2: usize = 0x2007_FC00;
+    pub const HCPU_TO_LCPU_CH2: usize = super::memory_map::shared::HCPU2LCPU_MB_CH2;
 
     /// LCPU -> HCPU (CH1) RX buffer start, HCPU view, Rev A/A3.
-    pub const LCPU_TO_HCPU_CH1_A3: usize = 0x2040_5C00;
+    pub const LCPU_TO_HCPU_CH1_A3: usize = super::memory_map::a3::LCPU2HCPU_CH1;
 
     /// LCPU -> HCPU (CH1) RX buffer start, HCPU view, Rev B/Letter.
-    pub const LCPU_TO_HCPU_CH1_REV_B: usize = 0x2040_2800;
+    pub const LCPU_TO_HCPU_CH1_REV_B: usize = super::memory_map::letter::LCPU2HCPU_CH1;
 
     /// LCPU -> HCPU (CH2) RX buffer start, HCPU view, Rev A/A3.
-    pub const LCPU_TO_HCPU_CH2_A3: usize = 0x2040_5E00;
+    pub const LCPU_TO_HCPU_CH2_A3: usize = super::memory_map::a3::LCPU2HCPU_CH2;
 
     /// LCPU -> HCPU (CH2) RX buffer start, HCPU view, Rev B/Letter.
-    pub const LCPU_TO_HCPU_CH2_REV_B: usize = 0x2040_2A00;
+    pub const LCPU_TO_HCPU_CH2_REV_B: usize = super::memory_map::letter::LCPU2HCPU_CH2;
 
     /// HCPU SRAM -> LCPU alias offset (for sharing TX buffer).
-    pub const HCPU_TO_LCPU_OFFSET: usize = 0x0A00_0000;
+    pub const HCPU_TO_LCPU_OFFSET: usize = super::memory_map::shared::HCPU_TO_LCPU_OFFSET;
 
     /// Convert HCPU SRAM address to LCPU view.
     #[inline]

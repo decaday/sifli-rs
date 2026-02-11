@@ -1,50 +1,55 @@
-//! 核间 IPC Queue（MAILBOX doorbell + 共享内存环形缓冲）。
+//! Inter-core IPC Queue (MAILBOX doorbell + shared memory ring buffer).
 //!
-//! 在 HCPU Rust 侧复刻 SiFli SDK `ipc_queue` 的线协议，与 LCPU ROM/固件保持兼容。
+//! Replicates the SiFli SDK `ipc_queue` wire protocol on the HCPU Rust side,
+//! maintaining compatibility with LCPU ROM/firmware.
 //!
-//! # 架构说明
+//! # Architecture
 //!
-//! IPC 机制由两部分组成：**中断通知**（doorbell）和**共享内存**（环形缓冲区）。
+//! The IPC mechanism consists of two parts: **interrupt notification** (doorbell) and
+//! **shared memory** (ring buffer).
 //!
-//! ## 1. 中断通知（MAILBOX 硬件）
+//! ## 1. Interrupt Notification (MAILBOX hardware)
 //!
-//! SF32LB52x 有两个 MAILBOX 外设：
-//! - **MAILBOX1**（4 个通道 C1-C4）：HCPU 写 → 触发 LCPU 中断
-//! - **MAILBOX2**（2 个通道 C1-C2）：LCPU 写 → 触发 HCPU 中断
+//! SF32LB52x has two MAILBOX peripherals:
+//! - **MAILBOX1** (4 channels C1-C4): HCPU writes -> triggers LCPU interrupt
+//! - **MAILBOX2** (2 channels C1-C2): LCPU writes -> triggers HCPU interrupt
 //!
-//! **IPC queue 只使用 MAILBOX1_C1 和 MAILBOX2_C1**，每个通道的中断寄存器有 16 个独立的位，
-//! IPC 用其中 bit 0-7 对应 qid 0-7。当需要通知对方时，写 ITR 寄存器的对应位触发中断。
+//! **IPC queue only uses MAILBOX1_C1 and MAILBOX2_C1**. Each channel's interrupt register
+//! has 16 independent bits; IPC uses bits 0-7 corresponding to qid 0-7. To notify the
+//! peer, write the corresponding bit in the ITR register to trigger an interrupt.
 //!
 //! ```text
 //! MAILBOX1_C1.IER/ITR/ISR:  [bit15 ... bit8 | bit7(qid7) ... bit1(qid1) bit0(qid0)]
 //! MAILBOX2_C1.IER/ITR/ISR:  [bit15 ... bit8 | bit7(qid7) ... bit1(qid1) bit0(qid0)]
 //! ```
 //!
-//! **MAILBOX1_C2/C3/C4 和 MAILBOX2_C2 在 IPC queue 机制中未使用。**
+//! **MAILBOX1_C2/C3/C4 and MAILBOX2_C2 are not used by the IPC queue mechanism.**
 //!
-//! ## 2. 共享内存（SRAM 缓冲区）
+//! ## 2. Shared Memory (SRAM buffers)
 //!
-//! 数据通过 SRAM 中的环形缓冲区传输。SDK 预分配了两组缓冲区（每组 512 字节）：
+//! Data is transferred through ring buffers in SRAM. The SDK pre-allocates two buffer
+//! pairs (512 bytes each):
 //!
-//! | 缓冲区名称 | HCPU 地址 | 用途 |
-//! |-----------|----------|------|
-//! | HCPU2LCPU_BUF1 | 0x2007FE00 | qid0 (HCI) 的 TX |
-//! | HCPU2LCPU_BUF2 | 0x2007FC00 | qid1-7 的 TX |
-//! | LCPU2HCPU_BUF1 | 0x20405C00 | qid0 (HCI) 的 RX |
-//! | LCPU2HCPU_BUF2 | 0x20405E00 | qid1-7 的 RX |
+//! | Buffer Name | HCPU Address | Purpose |
+//! |-------------|-------------|---------|
+//! | HCPU2LCPU_BUF1 | 0x2007FE00 | TX for qid0 (HCI) |
+//! | HCPU2LCPU_BUF2 | 0x2007FC00 | TX for qid1-7 |
+//! | LCPU2HCPU_BUF1 | 0x20405C00 | RX for qid0 (HCI) |
+//! | LCPU2HCPU_BUF2 | 0x20405E00 | RX for qid1-7 |
 //!
-//! 注意：缓冲区名称中的 "BUF1/BUF2" 与 MAILBOX 的物理通道 C1/C2 **没有对应关系**。
+//! Note: "BUF1/BUF2" in buffer names have **no correspondence** to physical MAILBOX
+//! channels C1/C2.
 //!
-//! ## 3. SDK qid 分配（sf32lb52x）
+//! ## 3. SDK qid allocation (sf32lb52x)
 //!
-//! | qid | 缓冲区 | 用途 |
-//! |-----|--------|------|
-//! | 0 | BUF1 | HCI（蓝牙 controller 通信）|
-//! | 1 | BUF2 | 系统 IPC（data service 等）|
-//! | 6 | BUF2 | 蓝牙音频 |
-//! | 7 | BUF2 | 调试/日志 |
+//! | qid | Buffer | Purpose |
+//! |-----|--------|---------|
+//! | 0 | BUF1 | HCI (Bluetooth controller communication) |
+//! | 1 | BUF2 | System IPC (data service, etc.) |
+//! | 6 | BUF2 | Bluetooth audio |
+//! | 7 | BUF2 | Debug/logging |
 //!
-//! # 用法示例
+//! # Usage Example
 //!
 //! ```no_run
 //! use sifli_hal::{bind_interrupts, ipc};
@@ -116,7 +121,7 @@ impl embedded_io::Error for Error {
     }
 }
 
-/// IPC 初始化配置。
+/// IPC initialization configuration.
 #[derive(Debug, Clone, Copy)]
 pub struct Config {
     pub irq_priority: interrupt::Priority,
@@ -131,7 +136,7 @@ impl Default for Config {
     }
 }
 
-/// 单个队列的配置（对齐 SDK `ipc_queue_cfg_t` 的必要字段）。
+/// Single queue configuration (essential fields from SDK `ipc_queue_cfg_t`).
 #[derive(Debug, Clone, Copy)]
 pub struct QueueConfig {
     pub qid: u8,
@@ -142,7 +147,7 @@ pub struct QueueConfig {
 }
 
 impl QueueConfig {
-    /// qid0：SDK 蓝牙 HCI 通道，使用 BUF1 缓冲区。
+    /// qid0: SDK Bluetooth HCI channel, using BUF1 buffer.
     pub fn qid0_hci() -> Self {
         let tx = IpcRegion::HCPU_TO_LCPU_CH1;
         Self {
@@ -154,7 +159,7 @@ impl QueueConfig {
         }
     }
 
-    /// qid1：SDK 系统 IPC 通道（data-service 等），使用 BUF2 缓冲区。
+    /// qid1: SDK system IPC channel (data-service, etc.), using BUF2 buffer.
     pub fn qid1_system() -> Self {
         let tx = IpcRegion::HCPU_TO_LCPU_CH2;
         Self {
@@ -193,10 +198,10 @@ static QUEUES: [QueueState; HW_QUEUE_NUM] = [const { QueueState::new() }; HW_QUE
 // Interrupt handler
 // ============================================================================
 
-/// IPC 中断处理器
+/// IPC interrupt handler.
 ///
-/// 直接在中断中处理 MAILBOX2_CH1 中断并唤醒对应的 IPC queue，
-/// 无需 spawn 单独的 task。
+/// Handles MAILBOX2_CH1 interrupt directly and wakes the corresponding IPC queue,
+/// without spawning a separate task.
 ///
 /// # Example
 ///
@@ -215,18 +220,18 @@ impl interrupt::typelevel::Handler<interrupt::typelevel::MAILBOX2_CH1> for Inter
     unsafe fn on_interrupt() {
         let regs = crate::pac::MAILBOX2;
 
-        // 读取 masked interrupt status
+        // Read masked interrupt status
         let misr = regs.misr(0).read().0 as u16;
         if misr == 0 {
             return;
         }
 
-        // 清除中断
-        regs.icr(0).write(|w| w.0 = misr as u32);
+        // Clear interrupt
+        regs.icr(0).write_value(crate::pac::mailbox::regs::Ixr(misr as u32));
 
         fence(Ordering::SeqCst);
 
-        // 遍历触发的 bit，唤醒对应 queue
+        // Iterate triggered bits and wake corresponding queues
         for qid in 0..HW_QUEUE_NUM {
             if misr & (1 << qid) != 0 {
                 handle_rx_irq(qid as u8);
@@ -246,10 +251,10 @@ fn handle_rx_irq(qid: u8) {
     let len = if rx_ptr == 0 {
         0
     } else {
-        // LCPU 写入 circular buffer 数据后触发 mailbox 中断。
-        // Acquire load 只保证 rx_ptr 指针可见，不保证 LCPU 对 buffer
-        // 内容（write_idx_mirror 等字段）的写入已刷新到共享 SRAM。
-        // 显式 SeqCst fence 确保后续 volatile read 能看到最新数据。
+        // LCPU triggers mailbox interrupt after writing to the circular buffer.
+        // Acquire load only guarantees rx_ptr pointer visibility, not that LCPU's
+        // writes to buffer contents (write_idx_mirror, etc.) are flushed to shared SRAM.
+        // Explicit SeqCst fence ensures subsequent volatile reads see the latest data.
         fence(Ordering::SeqCst);
         unsafe { (rx_ptr as *const CircularBuf).data_len() }
     };
@@ -262,7 +267,7 @@ fn handle_rx_irq(qid: u8) {
 // IPC driver
 // ============================================================================
 
-/// IPC（HCPU 侧）初始化与队列打开。
+/// IPC (HCPU side) initialization and queue management.
 ///
 /// # Example
 ///
@@ -290,10 +295,10 @@ impl<'d> Ipc<'d> {
     ) -> Self {
         into_ref!(tx_ch);
 
-        // MAILBOX1 在 HPSYS，需要打开 RCC（不 reset，避免影响其它 channel 的配置）。
+        // MAILBOX1 is in HPSYS; enable RCC (no reset, to avoid disturbing other channels).
         rcc::enable::<peripherals::MAILBOX1>();
 
-        // 配置 MAILBOX2_CH1 中断优先级
+        // Configure MAILBOX2_CH1 interrupt priority
         let irq = crate::interrupt::MAILBOX2_CH1;
         unsafe {
             irq.set_priority(config.irq_priority);
@@ -304,7 +309,7 @@ impl<'d> Ipc<'d> {
         Self { _tx_ch: tx_ch }
     }
 
-    /// 打开一个 IPC Queue（等价于 SDK 的 init+open 的最小子集）。
+    /// Open an IPC Queue (minimal subset of SDK init+open).
     pub fn open_queue(&mut self, cfg: QueueConfig) -> Result<IpcQueue, Error> {
         if cfg.qid as usize >= HW_QUEUE_NUM {
             return Err(Error::InvalidQid);
@@ -323,7 +328,7 @@ impl<'d> Ipc<'d> {
             st.rx_buf.store(cfg.rx_buf_addr, Ordering::Release);
             st.tx_buf.store(cfg.tx_buf_addr, Ordering::Release);
 
-            // sender 初始化 tx ring buffer，并把 rd_buffer_ptr 改成对端可见 alias。
+            // Sender initializes TX ring buffer and remaps rd_buffer_ptr to peer-visible alias.
             if cfg.tx_buf_addr != 0 {
                 unsafe {
                     let cb = cfg.tx_buf_addr as *mut CircularBuf;
@@ -339,7 +344,7 @@ impl<'d> Ipc<'d> {
                 }
             }
 
-            // SDK 行为：open 时不读取 rx ring buffer（避免对端尚未初始化导致误判/崩溃）。
+            // SDK behavior: don't read RX ring buffer on open (peer may not be initialized yet).
             st.rx_len.store(0, Ordering::Release);
             debug!(
                 "IPC open_queue: qid={} rx=0x{:08X} tx=0x{:08X} tx_alias=0x{:08X} tx_size={}",
@@ -350,16 +355,16 @@ impl<'d> Ipc<'d> {
                 cfg.tx_buf_size,
             );
 
-            // Unmask：按 SDK 语义，在 tx mailbox 上放开 qid；同时也放开 rx 侧，降低丢中断风险。
+            // Unmask: per SDK semantics, unmask qid on TX mailbox; also unmask RX side to reduce missed interrupts.
             let qid_mask = 1u16 << cfg.qid;
-            // 直接操作 MAILBOX1 寄存器
+            // Directly operate MAILBOX1 registers
             crate::pac::MAILBOX1
                 .ier(0)
                 .modify(|w| w.0 |= qid_mask as u32);
             {
                 let mb2 = crate::pac::MAILBOX2;
                 mb2.ier(0).modify(|w| w.0 |= qid_mask as u32);
-                mb2.icr(0).write(|w| w.0 = qid_mask as u32);
+                mb2.icr(0).write_value(crate::pac::mailbox::regs::Ixr(qid_mask as u32));
             }
 
             Ok(IpcQueue {
@@ -370,85 +375,85 @@ impl<'d> Ipc<'d> {
     }
 }
 
-/// 已打开的 IPC Queue 句柄。
+/// Opened IPC Queue handle.
 pub struct IpcQueue {
     rx: IpcQueueRx,
     tx: IpcQueueTx,
 }
 
-/// IPC Queue 的接收端（RX）。
+/// IPC Queue receive half (RX).
 ///
-/// 通过 [`IpcQueue::split()`] 获取，可独立于 TX 端进行读取操作。
+/// Obtained via [`IpcQueue::split()`], can perform read operations independently of the TX half.
 pub struct IpcQueueRx {
     qid: u8,
 }
 
-/// IPC Queue 的发送端（TX）。
+/// IPC Queue transmit half (TX).
 ///
-/// 通过 [`IpcQueue::split()`] 获取，可独立于 RX 端进行写入操作。
+/// Obtained via [`IpcQueue::split()`], can perform write operations independently of the RX half.
 pub struct IpcQueueTx {
     qid: u8,
 }
 
 impl IpcQueue {
-    /// 返回队列 ID。
+    /// Returns the queue ID.
     #[inline]
     pub fn qid(&self) -> u8 {
         self.rx.qid
     }
 
-    /// 将 IpcQueue 拆分为独立的 RX 和 TX 端。
+    /// Split the IpcQueue into independent RX and TX halves.
     ///
-    /// 拆分后，RX 和 TX 可以在不同的任务中并发使用，不会互相阻塞。
-    /// 这对于需要同时进行读写操作的场景（如 HCI 通信）非常有用。
+    /// After splitting, RX and TX can be used concurrently in different tasks without
+    /// blocking each other. Useful for scenarios requiring simultaneous read/write (e.g., HCI).
     ///
     /// # Example
     ///
     /// ```no_run
     /// let queue = ipc.open_queue(cfg)?;
     /// let (rx, tx) = queue.split();
-    /// // rx 和 tx 可以在不同任务中使用
+    /// // rx and tx can be used in different tasks
     /// ```
     pub fn split(self) -> (IpcQueueRx, IpcQueueTx) {
         (self.rx, self.tx)
     }
 
-    /// 当前 rx buffer 中可读字节数（由中断更新，必要时可再读一次共享 ring buffer 自校准）。
+    /// Readable bytes in RX buffer (updated by interrupt; can re-read shared ring buffer for self-calibration).
     #[inline]
     pub fn rx_available(&self) -> Result<usize, Error> {
         self.rx.rx_available()
     }
 
-    /// 读数据（非阻塞）。无数据时返回 `Ok(0)`。
+    /// Read data (non-blocking). Returns `Ok(0)` when no data available.
     #[inline]
     pub fn read(&mut self, out: &mut [u8]) -> Result<usize, Error> {
         self.rx.read(out)
     }
 
-    /// 等待直到 rx 有数据。
+    /// Wait until RX has data available.
     #[inline]
     pub async fn wait_readable(&mut self) -> Result<(), Error> {
         self.rx.wait_readable().await
     }
 
-    /// 异步读（至少读到 1 字节，除非发生错误）。
+    /// Async read (reads at least 1 byte unless an error occurs).
     #[inline]
     pub async fn read_async(&mut self, out: &mut [u8]) -> Result<usize, Error> {
         self.rx.read_async(out).await
     }
 
-    /// 写数据到 tx ring buffer。
+    /// Write data to TX ring buffer.
     ///
-    /// 与 SDK 一致：该接口不保证线程安全（避免多个线程并发写同一队列）。
+    /// Consistent with SDK: this interface is not thread-safe (avoid concurrent writes to the same queue).
     #[inline]
     pub fn write(&mut self, data: &[u8]) -> Result<usize, Error> {
         self.tx.write(data)
     }
 
-    /// 触发 doorbell 通知对端有数据可读。
+    /// Trigger doorbell to notify the peer that data is ready.
     ///
-    /// 调用 `write` 后需要调用 `flush` 才能通知 LCPU。
-    /// 这样设计是为了支持多次 write 后只触发一次 doorbell，避免 LCPU 收到不完整的包。
+    /// Must call `flush` after `write` to notify LCPU.
+    /// This design supports batching multiple writes with a single doorbell, preventing LCPU from receiving incomplete packets.
     #[inline]
     pub fn flush(&mut self) -> Result<(), Error> {
         self.tx.flush()
@@ -465,7 +470,7 @@ impl IpcQueueRx {
         self.qid
     }
 
-    /// 当前 rx buffer 中可读字节数。
+    /// Readable bytes in RX buffer.
     pub fn rx_available(&self) -> Result<usize, Error> {
         let st = &QUEUES[self.qid as usize];
         if !st.active.load(Ordering::Acquire) {
@@ -474,7 +479,7 @@ impl IpcQueueRx {
         Ok(st.rx_len.load(Ordering::Acquire))
     }
 
-    /// 读数据（非阻塞）。无数据时返回 `Ok(0)`。
+    /// Read data (non-blocking). Returns `Ok(0)` when no data available.
     pub fn read(&mut self, out: &mut [u8]) -> Result<usize, Error> {
         let st = &QUEUES[self.qid as usize];
         if !st.active.load(Ordering::Acquire) {
@@ -511,7 +516,7 @@ impl IpcQueueRx {
         Ok(n)
     }
 
-    /// 等待直到 rx 有数据。
+    /// Wait until RX has data available.
     pub async fn wait_readable(&mut self) -> Result<(), Error> {
         let st = &QUEUES[self.qid as usize];
         if !st.active.load(Ordering::Acquire) {
@@ -535,7 +540,7 @@ impl IpcQueueRx {
         Ok(())
     }
 
-    /// 异步读（至少读到 1 字节，除非发生错误）。
+    /// Async read (reads at least 1 byte unless an error occurs).
     pub async fn read_async(&mut self, out: &mut [u8]) -> Result<usize, Error> {
         self.wait_readable().await?;
         self.read(out)
@@ -563,9 +568,9 @@ impl IpcQueueTx {
         self.qid
     }
 
-    /// 写数据到 tx ring buffer。
+    /// Write data to TX ring buffer.
     ///
-    /// 与 SDK 一致：该接口不保证线程安全（避免多个线程并发写同一队列）。
+    /// Consistent with SDK: this interface is not thread-safe (avoid concurrent writes to the same queue).
     pub fn write(&mut self, data: &[u8]) -> Result<usize, Error> {
         let st = &QUEUES[self.qid as usize];
         if !st.active.load(Ordering::Acquire) {
@@ -582,9 +587,9 @@ impl IpcQueueTx {
         Ok(n)
     }
 
-    /// 触发 doorbell 通知对端有数据可读。
+    /// Trigger doorbell to notify the peer that data is ready.
     ///
-    /// 调用 `write` 后需要调用 `flush` 才能通知 LCPU。
+    /// Must call `flush` after `write` to notify LCPU.
     pub fn flush(&mut self) -> Result<(), Error> {
         let st = &QUEUES[self.qid as usize];
         if !st.active.load(Ordering::Acquire) {
@@ -594,7 +599,7 @@ impl IpcQueueTx {
         fence(Ordering::SeqCst);
         crate::pac::MAILBOX1
             .itr(0)
-            .write(|w| w.0 = 1u32 << self.qid);
+            .write_value(crate::pac::mailbox::regs::Ixr(1u32 << self.qid));
         Ok(())
     }
 }
@@ -623,8 +628,8 @@ impl embedded_io_async::ErrorType for IpcQueue {
 
 impl embedded_io_async::Read for IpcQueue {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
-        // embedded_io::Read 语义要求：至少读取 1 字节（除非 EOF 或错误）
-        // 这里使用 wait_readable 等待数据可用，然后读取
+        // embedded_io::Read semantics: must read at least 1 byte (unless EOF or error)
+        // Use wait_readable to wait for data, then read
         self.wait_readable().await?;
         IpcQueue::read(self, buf)
     }
@@ -632,12 +637,12 @@ impl embedded_io_async::Read for IpcQueue {
 
 impl embedded_io_async::Write for IpcQueue {
     async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
-        // IpcQueue::write 是非阻塞的，直接调用
+        // IpcQueue::write is non-blocking, call directly
         IpcQueue::write(self, buf)
     }
 
     async fn flush(&mut self) -> Result<(), Self::Error> {
-        // 触发 doorbell 通知 LCPU
+        // Trigger doorbell to notify LCPU
         IpcQueue::flush(self)
     }
 }

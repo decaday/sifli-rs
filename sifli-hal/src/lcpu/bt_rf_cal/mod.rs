@@ -23,7 +23,7 @@ use crate::rcc::{lp_rfc_reset_asserted, set_lp_rfc_reset};
 use crate::Peripheral;
 
 /// RFC SRAM base address
-const BT_RFC_MEM_BASE: u32 = 0x4008_2000;
+const BT_RFC_MEM_BASE: u32 = super::memory_map::rf::BT_RFC_MEM_BASE;
 
 /// Default EDR PA BM values for each power level (0-7)
 ///
@@ -405,6 +405,10 @@ pub fn bt_rf_cal(dma_ch: impl Peripheral<P = impl Channel>) {
 
     // SDK bf0_lcpu_init.c:208 — clear Exchange Memory
     unsafe {
-        core::ptr::write_bytes(0x2040_8000 as *mut u8, 0, 0x5000);
+        core::ptr::write_bytes(
+            super::memory_map::shared::EM_START as *mut u8,
+            0,
+            super::memory_map::shared::EM_SIZE,
+        );
     }
 }

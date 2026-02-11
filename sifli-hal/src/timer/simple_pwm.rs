@@ -50,7 +50,7 @@ where
         let fsel_val = pin.fsel();
         
         critical_section::with(|_| {
-            // 1. 配置 GPIO FSEL (AF 功能选择)
+            // 1. Configure GPIO FSEL (AF function select)
             if pin_num <= 38 {
                 crate::pac::HPSYS_PINMUX.pad_pa0_38(pin_num as usize).modify(|w| {
                     w.set_fsel(fsel_val);
@@ -68,11 +68,11 @@ where
                 });
             }
             
-            // 1b. 配置 HPSYS_CFG PINR (某些外设需要)
+            // 1b. Configure HPSYS_CFG PINR (required by some peripherals)
             pin.set_cfg_pin();
             
-            // 2. 启用 GPIO 输出
-            // PA0-PA31 在 Bank 0, PA32-PA44 在 Bank 1
+            // 2. Enable GPIO output
+            // PA0-PA31 in Bank 0, PA32-PA44 in Bank 1
             if pin_num < 32 {
                 crate::pac::HPSYS_GPIO.doesr0().write_value(
                     crate::pac::hpsys_gpio::regs::Doesr0(1 << pin_num)
@@ -83,8 +83,8 @@ where
                 );
             }
             
-            // 3. 配置 Timer PINR (Pin Routing) - SiFli 特有！
-            // 由 pin.set_cfg_pin() 完成
+            // 3. Configure Timer PINR (Pin Routing) - SiFli specific!
+            // Done by pin.set_cfg_pin()
         });
         
         Self {
@@ -284,15 +284,15 @@ impl<'d, T: GptimInstance> SimplePwm<'d, T> {
         let regs = self.inner.regs();
         let ccr_addr = regs.ccr(channel.index()).as_ptr();
         
-        // 参考 C SDK: HAL_GPT_PWM_Update_Start_DMA
-        // 关键顺序：
-        // 1. 先启动 DMA
-        // 2. 再启用 Update DMA request (DIER.UDE)
-        // 3. 确保通道和 Timer 已启用
+        // Reference: C SDK HAL_GPT_PWM_Update_Start_DMA
+        // Critical sequence:
+        // 1. Start DMA first
+        // 2. Then enable Update DMA request (DIER.UDE)
+        // 3. Ensure channel and Timer are enabled
         
         // Start DMA transfer using reborrow
         unsafe {
-            // 1. 启动 DMA（这会配置并启动 DMA 传输）
+            // 1. Start DMA (configures and initiates DMA transfer)
             let transfer = Transfer::new_write(
                 dma.channel.reborrow(),
                 dma.request,
@@ -301,21 +301,21 @@ impl<'d, T: GptimInstance> SimplePwm<'d, T> {
                 TransferOptions::default(),
             );
             
-            // 2. 启用 Update DMA request（DMA 已经在等待 Update 事件）
+            // 2. Enable Update DMA request (DMA is already waiting for Update events)
             if !original_ude {
                 self.inner.enable_update_dma(true);
             }
             
-            // 3. 确保通道已启用（应该已经在 new() 中启用了）
+            // 3. Ensure channel is enabled (should already be enabled in new())
             regs.ccer().modify(|w| w.set_cce(channel.index(), true));
             
-            // 4. 确保 Timer 在运行（应该已经在 new() 中启动了）
+            // 4. Ensure Timer is running (should already be started in new())
             regs.cr1().modify(|w| w.set_cen(true));
             
-            // 等待 DMA 传输完成
+            // Wait for DMA transfer to complete
             transfer.blocking_wait();
             
-            // 5. 禁用 Update DMA
+            // 5. Disable Update DMA
             if !original_ude {
                 self.inner.enable_update_dma(false);
             }

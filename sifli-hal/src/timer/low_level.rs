@@ -254,7 +254,7 @@ impl<'d, T: GptimInstance> Timer<'d, T> {
 /// Calculate PSC and ARR for target frequency (16-bit ARR)
 ///
 /// Based on C SDK implementation (drv_pwm.c line 926-931)
-fn calculate_frequency_16bit(timer_clk: Hertz, target_freq: Hertz) -> (u16, u16) {
+pub(crate) fn calculate_frequency_16bit(timer_clk: Hertz, target_freq: Hertz) -> (u16, u16) {
     const MAX_ARR: u32 = 0xFFFF;
     const MIN_PERIOD: u32 = 3;
 

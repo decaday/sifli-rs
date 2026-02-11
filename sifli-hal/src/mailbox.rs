@@ -83,7 +83,7 @@ macro_rules! impl_mailbox_channel {
             pub fn trigger(&mut self, mask: u16) {
                 crate::pac::MAILBOX1
                     .itr($ch - 1)
-                    .write(|w| w.0 = mask as u32);
+                    .write_value(crate::pac::mailbox::regs::Ixr(mask as u32));
             }
 
             /// Enable interrupt bits
@@ -107,7 +107,7 @@ macro_rules! impl_mailbox_channel {
             pub fn clear_interrupt(&mut self, mask: u16) {
                 crate::pac::MAILBOX1
                     .icr($ch - 1)
-                    .write(|w| w.0 = mask as u32);
+                    .write_value(crate::pac::mailbox::regs::Ixr(mask as u32));
             }
 
             /// Read raw interrupt status
@@ -163,7 +163,7 @@ macro_rules! impl_mailbox_channel {
             pub fn trigger(&mut self, mask: u16) {
                 crate::pac::MAILBOX2
                     .itr($ch - 1)
-                    .write(|w| w.0 = mask as u32);
+                    .write_value(crate::pac::mailbox::regs::Ixr(mask as u32));
             }
 
             /// Enable interrupt bits
@@ -187,7 +187,7 @@ macro_rules! impl_mailbox_channel {
             pub fn clear_interrupt(&mut self, mask: u16) {
                 crate::pac::MAILBOX2
                     .icr($ch - 1)
-                    .write(|w| w.0 = mask as u32);
+                    .write_value(crate::pac::mailbox::regs::Ixr(mask as u32));
             }
 
             /// Read raw interrupt status
@@ -243,7 +243,7 @@ macro_rules! impl_mailbox_channel {
                 if misr == 0 {
                     return;
                 }
-                regs.icr($ch - 1).write(|w| w.0 = misr as u32);
+                regs.icr($ch - 1).write_value(crate::pac::mailbox::regs::Ixr(misr as u32));
                 $state.pending_bits.fetch_or(misr, Ordering::SeqCst);
                 $state.waker.wake();
             }

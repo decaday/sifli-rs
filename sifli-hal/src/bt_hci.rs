@@ -1,7 +1,8 @@
-//! bt-hci Transport 实现，基于 IPC 与 LCPU BT controller 通信。
+//! bt-hci Transport implementation, communicating with LCPU BT controller via IPC.
 //!
-//! 此模块为 [`IpcQueue`] 提供 bt-hci 兼容的 Transport 封装，
-//! 使得可以使用 `bt-hci` 和 `trouble` 等上层库与 LCPU 上的蓝牙控制器通信。
+//! This module provides a bt-hci compatible Transport wrapper for [`IpcQueue`],
+//! enabling communication with the LCPU Bluetooth controller using libraries
+//! like `bt-hci` and `trouble`.
 //!
 //! # Example
 //!
@@ -21,7 +22,7 @@
 //!     let transport = IpcHciTransport::new(queue);
 //!     let controller: ExternalController<_, 4> = ExternalController::new(transport);
 //!
-//!     // 现在可以使用 bt-hci 的类型安全 API
+//!     // Now you can use bt-hci's type-safe API
 //!     // use bt_hci::cmd::controller_baseband::Reset;
 //!     // controller.exec(Reset).await.unwrap();
 //! }
@@ -35,12 +36,14 @@ use embedded_io::ReadExactError;
 
 use crate::ipc::{Error as IpcError, IpcQueue, IpcQueueRx, IpcQueueTx};
 
-/// 用于 HCI 写入日志的临时缓冲区
+#[cfg(any(feature = "defmt", feature = "log"))]
+/// Temporary buffer for logging HCI writes.
 struct LogBuf {
     buf: [u8; 264],
     pos: usize,
 }
 
+#[cfg(any(feature = "defmt", feature = "log"))]
 impl LogBuf {
     fn new() -> Self {
         Self {
@@ -53,10 +56,12 @@ impl LogBuf {
     }
 }
 
+#[cfg(any(feature = "defmt", feature = "log"))]
 impl embedded_io::ErrorType for LogBuf {
     type Error = embedded_io::ErrorKind;
 }
 
+#[cfg(any(feature = "defmt", feature = "log"))]
 impl embedded_io::Write for LogBuf {
     fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
         let remaining = self.buf.len() - self.pos;
@@ -70,13 +75,15 @@ impl embedded_io::Write for LogBuf {
     }
 }
 
-/// 包装 IPC RX，记录通过它读取的所有字节
+#[cfg(any(feature = "defmt", feature = "log"))]
+/// Wraps IPC RX and logs all bytes read through it.
 struct LoggingReader<'a> {
     inner: &'a mut IpcQueueRx,
     log: [u8; 64],
     pos: usize,
 }
 
+#[cfg(any(feature = "defmt", feature = "log"))]
 impl<'a> LoggingReader<'a> {
     fn new(inner: &'a mut IpcQueueRx) -> Self {
         Self {
@@ -92,14 +99,16 @@ impl<'a> LoggingReader<'a> {
     }
 }
 
+#[cfg(any(feature = "defmt", feature = "log"))]
 impl embedded_io::ErrorType for LoggingReader<'_> {
     type Error = IpcError;
 }
 
+#[cfg(any(feature = "defmt", feature = "log"))]
 impl embedded_io_async::Read for LoggingReader<'_> {
     async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
         let n = embedded_io_async::Read::read(self.inner, buf).await?;
-        // 记录读到的字节到日志缓冲区
+        // Record read bytes to the log buffer
         let copy_end = (self.pos + n).min(64);
         if self.pos < 64 {
             let copy_n = copy_end - self.pos;
@@ -110,12 +119,12 @@ impl embedded_io_async::Read for LoggingReader<'_> {
     }
 }
 
-/// bt-hci Transport 错误类型。
+/// bt-hci Transport error type.
 #[derive(Debug)]
 pub enum Error {
-    /// IPC 读取错误。
+    /// IPC read error.
     Read(ReadHciError<IpcError>),
-    /// IPC 写入错误。
+    /// IPC write error.
     Write(IpcError),
 }
 
@@ -173,25 +182,26 @@ impl From<bt_hci::FromHciBytesError> for Error {
     }
 }
 
-/// IPC HCI Transport，将 [`IpcQueue`] 包装为 bt-hci Transport。
+/// IPC HCI Transport, wrapping [`IpcQueue`] as a bt-hci Transport.
 ///
-/// 使用 H4 格式（带 packet indicator 字节）通信。
-/// 内部将 RX 和 TX 分离，使用独立的 Mutex 保护，支持并发读写。
+/// Communicates using H4 format (with packet indicator byte).
+/// Internally splits RX and TX with independent Mutex guards for concurrent read/write.
 pub struct IpcHciTransport {
     rx: Mutex<CriticalSectionRawMutex, IpcQueueRx>,
     tx: Mutex<CriticalSectionRawMutex, IpcQueueTx>,
 }
 
 impl IpcHciTransport {
-    /// 创建新的 IPC HCI Transport。
+    /// Create a new IPC HCI Transport.
     pub fn new(queue: IpcQueue) -> Self {
         let (rx, tx) = queue.split();
         Self::from_parts(rx, tx)
     }
 
-    /// 从已拆分的 RX/TX 端创建 Transport。
+    /// Create Transport from pre-split RX/TX halves.
     ///
-    /// 当需要在创建 Transport 之前访问 RX 端（如消费 warmup 事件）时使用此方法。
+    /// Use this when you need to access the RX half before creating the Transport
+    /// (e.g., consuming the warmup event during `ble_power_on`).
     ///
     /// # Example
     ///
@@ -200,7 +210,7 @@ impl IpcHciTransport {
     /// use sifli_hal::bt_hci::IpcHciTransport;
     ///
     /// let (mut rx, tx) = queue.split();
-    /// // 可以先用 rx 做一些操作（如 ble_power_on 消费 warmup）
+    /// // Can use rx first (e.g., ble_power_on consumes warmup event)
     /// let transport = IpcHciTransport::from_parts(rx, tx);
     /// # }
     /// ```
@@ -219,25 +229,33 @@ impl embedded_io::ErrorType for IpcHciTransport {
 impl Transport for IpcHciTransport {
     async fn read<'a>(&self, rx: &'a mut [u8]) -> Result<ControllerToHostPacket<'a>, Self::Error> {
         let mut q = self.rx.lock().await;
-        // 用 LoggingReader 包装 IPC RX，记录每个接收到的字节
-        let mut logging_rx = LoggingReader::new(&mut *q);
-        let pkt = ControllerToHostPacket::read_hci_async(&mut logging_rx, rx)
-            .await
-            .map_err(Error::Read)?;
-        // 输出读取到的原始 HCI 字节
-        logging_rx.dump("HCI RX");
-        Ok(pkt)
+
+        #[cfg(any(feature = "defmt", feature = "log"))]
+        {
+            let mut logging_rx = LoggingReader::new(&mut *q);
+            let pkt = ControllerToHostPacket::read_hci_async(&mut logging_rx, rx)
+                .await
+                .map_err(Error::Read)?;
+            logging_rx.dump("HCI RX");
+            Ok(pkt)
+        }
+
+        #[cfg(not(any(feature = "defmt", feature = "log")))]
+        {
+            ControllerToHostPacket::read_hci_async(&mut *q, rx)
+                .await
+                .map_err(Error::Read)
+        }
     }
 
     async fn write<T: HostToControllerPacket>(&self, val: &T) -> Result<(), Self::Error> {
-        // ---- HCI TX 日志 ----
+        #[cfg(any(feature = "defmt", feature = "log"))]
         {
             let mut log_buf = LogBuf::new();
             let _ = WithIndicator::new(val).write_hci(&mut log_buf);
             let s = log_buf.as_slice();
             let end = s.len().min(64);
             if s.len() >= 4 && s[0] == 0x01 {
-                // HCI Command: [01] [opcode_lo] [opcode_hi] [param_len] ...
                 let opcode = (s[2] as u16) << 8 | s[1] as u16;
                 info!(
                     "HCI TX cmd(0x{:04X}) len={}: {:02X}",

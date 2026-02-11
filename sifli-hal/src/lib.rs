@@ -143,10 +143,10 @@ fn system_init() {
             r | (0b111111)
         });
 
-        // 与 SDK `mpu_config()` 的思路一致：避免遗留 I-cache 影响后续 MPU/Cache 配置。
+        // Consistent with SDK `mpu_config()`: invalidate stale I-cache before MPU/Cache configuration.
         cp.SCB.invalidate_icache();
 
-        // 配置 MPU，使跨核共享 SRAM 为 non-cacheable（与 SDK 行为一致）。
+        // Configure MPU to make cross-core shared SRAM non-cacheable (matching SDK behavior).
         mpu::init();
 
         // Enable Cache

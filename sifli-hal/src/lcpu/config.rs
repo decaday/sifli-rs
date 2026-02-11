@@ -197,3 +197,89 @@ impl Default for ActConfig {
         Self::DEFAULT
     }
 }
+
+/// LCPU boot-time configuration (firmware, patches, ROM parameters).
+#[derive(Debug, Clone, Copy)]
+pub struct BootConfig {
+    /// LCPU firmware image bytes.
+    ///
+    /// - A3 and earlier: must be provided and copied to LPSYS RAM.
+    /// - Letter Series: optional, firmware is in ROM.
+    pub firmware: Option<&'static [u8]>,
+
+    /// ROM configuration parameters.
+    pub rom: RomConfig,
+
+    /// Patch data for A3 and earlier (record + code format).
+    pub patch_a3: Option<super::PatchData>,
+
+    /// Patch data for Letter Series (A4/B4) (header + code format).
+    pub patch_letter: Option<super::PatchData>,
+
+    /// Skip LPSYS HCLK frequency check during image loading (use with care).
+    pub skip_frequency_check: bool,
+
+    /// Disable RF calibration (normally runs after patch installation).
+    pub disable_rf_cal: bool,
+}
+
+impl BootConfig {
+    /// Create a new config with all options unset.
+    pub const fn new() -> Self {
+        Self {
+            firmware: None,
+            rom: RomConfig {
+                wdt_time: 10,
+                wdt_clk: 32_768,
+                enable_lxt: true,
+                em_config: Some(EmConfig::DEFAULT),
+                act_config: Some(ActConfig::DEFAULT),
+            },
+            patch_a3: None,
+            patch_letter: None,
+            skip_frequency_check: false,
+            disable_rf_cal: false,
+        }
+    }
+}
+
+impl Default for BootConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// BLE-specific configuration (post-boot controller params + BD address).
+#[derive(Debug, Clone, Copy)]
+pub struct BleConfig {
+    /// BLE controller runtime parameters (applied after boot).
+    /// SDK equivalent: `ble_xtal_less_init()` in `bluetooth.c`.
+    pub controller: ControllerConfig,
+
+    /// Public BD address written to NVDS shared memory.
+    ///
+    /// LCPU ROM reads this during initialization.
+    /// Default: `[0x12, 0x34, 0x56, 0x78, 0xAB, 0xCD]` (SDK default).
+    pub bd_addr: [u8; 6],
+}
+
+impl BleConfig {
+    /// Create a new config with defaults.
+    pub const fn new() -> Self {
+        Self {
+            controller: ControllerConfig {
+                lld_prog_delay: 3,
+                xtal_enabled: false,
+                rc_cycle: 20,
+            },
+            bd_addr: [0x12, 0x34, 0x56, 0x78, 0xAB, 0xCD],
+        }
+    }
+}
+
+impl Default for BleConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+

@@ -9,15 +9,37 @@ pub const HPSYS_DVFS_MODE_D1_LIMIT: u32 = 48;
 pub const HPSYS_DVFS_MODE_S0_LIMIT: u32 = 144;
 pub const HPSYS_DVFS_MODE_S1_LIMIT: u32 = 240;
 
+const fn build_ulpmcr(ram_rm: u8, ram_ra: u8, ram_wa: u8, rom_rm: u8) -> Ulpmcr {
+    let mut v = Ulpmcr(0);
+    v.set_ram_rm(ram_rm);
+    v.set_ram_rme(true);
+    v.set_ram_ra(ram_ra);
+    v.set_ram_wa(ram_wa);
+    v.set_rom_rm(rom_rm);
+    v.set_rom_rme(true);
+    v
+}
+
+const fn build_lp_ulpmcr(ram_rm: u8, ram_ra: u8, ram_wa: u8, rom_rm: u8) -> LpUlpmcr {
+    let mut v = LpUlpmcr(0);
+    v.set_ram_rm(ram_rm);
+    v.set_ram_rme(true);
+    v.set_ram_ra(ram_ra);
+    v.set_ram_wa(ram_wa);
+    v.set_rom_rm(rom_rm);
+    v.set_rom_rme(true);
+    v
+}
+
 pub const HPSYS_DVFS_CONFIG: [HpsysDvfsConfig; 4] = [
     // LDO: 0.9V, BUCK: 1.0V
-    HpsysDvfsConfig { ldo_offset: -5, ldo: 0x6, buck: 0x9, ulpmcr: 0x00100330 },
+    HpsysDvfsConfig { ldo_offset: -5, ldo: 0x6, buck: 0x9, ulpmcr: build_ulpmcr(0, 1, 6, 0) },
     // LDO: 1.0V, BUCK: 1.1V
-    HpsysDvfsConfig { ldo_offset: -3, ldo: 0x8, buck: 0xA, ulpmcr: 0x00110331 },
+    HpsysDvfsConfig { ldo_offset: -3, ldo: 0x8, buck: 0xA, ulpmcr: build_ulpmcr(1, 1, 6, 1) },
     // LDO: 1.1V, BUCK: 1.25V
-    HpsysDvfsConfig { ldo_offset:  0, ldo: 0xB, buck: 0xD, ulpmcr: 0x00130213 },
+    HpsysDvfsConfig { ldo_offset:  0, ldo: 0xB, buck: 0xD, ulpmcr: build_ulpmcr(3, 0, 4, 3) },
     // LDO: 1.2V, BUCK: 1.35V
-    HpsysDvfsConfig { ldo_offset:  2, ldo: 0xD, buck: 0xF, ulpmcr: 0x00130213 },
+    HpsysDvfsConfig { ldo_offset:  2, ldo: 0xD, buck: 0xF, ulpmcr: build_ulpmcr(3, 0, 4, 3) },
 ];
 
 pub const HPSYS_DLL2_LIMIT: [u32; 4] = [
@@ -89,7 +111,7 @@ pub struct HpsysDvfsConfig {
     pub ldo_offset: i8,
     pub ldo: u8,
     pub buck: u8,
-    pub ulpmcr: u32,
+    pub ulpmcr: Ulpmcr,
 }
 
 pub(crate) fn config_hcpu_dvfs<F>(
@@ -183,7 +205,7 @@ fn switch_hcpu_dvfs_s2d<F>(
     config_clock();
 
     // configure memory param
-    HPSYS_CFG.ulpmcr().write_value(Ulpmcr(dvfs_config.ulpmcr));
+    HPSYS_CFG.ulpmcr().write_value(dvfs_config.ulpmcr);
     // Switch to D mode
     HPSYS_CFG.syscr().modify(|w| {
         w.set_ldo_vsel(true);
@@ -203,12 +225,12 @@ pub const LPSYS_DVFS_CONFIG: [LpsysDvfsConfig; 2] = [
     // D Mode: LDO 0.9V, ≤24MHz
     LpsysDvfsConfig {
         ldo: 0x6,
-        ulpmcr: 0x00120330,
+        ulpmcr: build_lp_ulpmcr(0, 1, 6, 2),
     },
     // S Mode: LDO 1.0V, ≤48MHz
     LpsysDvfsConfig {
         ldo: 0x8,
-        ulpmcr: 0x00120331,
+        ulpmcr: build_lp_ulpmcr(1, 1, 6, 2),
     },
 ];
 
@@ -268,7 +290,7 @@ pub struct LpsysDvfsConfig {
     /// LDO voltage setting
     pub ldo: u8,
     /// ULP memory control register value
-    pub ulpmcr: u32,
+    pub ulpmcr: LpUlpmcr,
 }
 
 /// Check if LPSYS is currently in S mode (higher voltage)
@@ -355,7 +377,7 @@ where
     config_clock();
 
     // Configure memory parameters
-    LPSYS_CFG.ulpmcr().write_value(LpUlpmcr(dvfs_config.ulpmcr));
+    LPSYS_CFG.ulpmcr().write_value(dvfs_config.ulpmcr);
 
     // Switch to D mode (lower voltage)
     LPSYS_CFG.syscr().modify(|w| {

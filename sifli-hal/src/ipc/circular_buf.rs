@@ -1,8 +1,9 @@
-//! SDK `circular_buf` 的 Rust 复刻（共享内存线协议）。
+//! Rust reimplementation of SDK `circular_buf` (shared memory wire protocol).
 //!
-//! 注意：该结构体位于跨核共享 RAM 中，字段会被另一核异步修改。
-//! Rust 侧必须避免对其创建 `&`/`&mut` 引用（否则会触发别名/数据竞争相关 UB），
-//! 因此这里用 raw pointer + volatile 读写实现与 SDK 一致的行为。
+//! Note: This struct resides in cross-core shared RAM; fields may be asynchronously
+//! modified by the other core. The Rust side must avoid creating `&`/`&mut` references
+//! (which would trigger aliasing/data-race UB), so raw pointers + volatile reads/writes
+//! are used to match SDK behavior.
 
 use core::ptr;
 use core::sync::atomic::{fence, Ordering};
@@ -26,7 +27,7 @@ const fn cb_get_ptr_mirror(ptr_idx_mirror: u32) -> u16 {
     (ptr_idx_mirror & CB_PTR_MIRROR_MASK) as u16
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CircularBufState {
     Empty,
     Full,
@@ -51,7 +52,7 @@ fn circular_buf_status(rd_ptr: u32, wr_ptr: u32) -> CircularBufState {
     }
 }
 
-/// SiFli SDK `struct circular_buf` 的 Rust 复刻（共享内存线协议）。
+/// Rust reimplementation of SiFli SDK `struct circular_buf` (shared memory wire protocol).
 #[repr(C)]
 pub(crate) struct CircularBuf {
     pub(crate) rd_buffer_ptr: *mut u8,
@@ -264,3 +265,4 @@ impl CircularBufMutPtrExt for *mut CircularBuf {
         length
     }
 }
+

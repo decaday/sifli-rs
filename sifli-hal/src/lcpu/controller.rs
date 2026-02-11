@@ -28,13 +28,14 @@ use crate::syscfg;
 /// Source: `SiFli-SDK/example/rom_bin/lcpu_boot_loader/lcpu_rom_micro.map`
 /// and `SiFli-SDK/example/rom_bin/lcpu_general_ble_img/lcpu_img_56x_52.axf`
 mod addr {
+    use super::super::memory_map::a3;
     use super::BtRomConfig;
 
     /// `rwip_prog_delay` address for A3 revision.
-    pub const RWIP_PROG_DELAY_A3: *mut u8 = 0x2040_FA94 as _;
+    pub const RWIP_PROG_DELAY_A3: *mut u8 = a3::RWIP_PROG_DELAY as _;
 
     /// `g_rom_config` base address for A3 revision (21 bytes).
-    pub const G_ROM_CONFIG_A3: *mut BtRomConfig = 0x2040_E48C as _;
+    pub const G_ROM_CONFIG_A3: *mut BtRomConfig = a3::G_ROM_CONFIG as _;
 }
 
 /// `g_rom_config.bit_valid` bit definitions.
@@ -64,15 +65,12 @@ const PTC_LCPU_BT_PKTDET: u8 = 105;
 /// CFO phase storage address in BT_RFC SRAM region.
 ///
 /// SDK: `cfo_phase_t *pt_cfo = (cfo_phase_t *)0x40082790` in `bluetooth_misc.c:282`.
-const CFO_PHASE_ADDR: u32 = 0x4008_2790;
+const CFO_PHASE_ADDR: u32 = super::memory_map::rf::CFO_PHASE_ADDR;
 
 /// CFO phase storage size in bytes (SDK: `sizeof(cfo_phase_t)` = 10).
 const CFO_PHASE_SIZE: usize = 10;
 
-/// PTC operation: OR (read-modify-write with OR).
-///
-/// SDK: `PTC_OP_OR = 0b101` in `bf0_hal_ptc.h`.
-const PTC_OP_OR: u8 = 0b101;
+use crate::pac::ptc::vals::Op as PtcOp;
 
 /// SDK `bluetooth_init()` equivalent.
 ///
@@ -239,7 +237,7 @@ fn setup_cfo_tracking() {
     //    TCR = trigsel(105=BT_PKTDET) | op(OR) | trigpol(0=rising edge)
     ptc2.tcr1().write(|w| {
         w.set_trigsel(PTC_LCPU_BT_PKTDET);
-        w.set_op(PTC_OP_OR);
+        w.set_op(PtcOp::Or);
         w.set_trigpol(false);
     });
 

@@ -12,6 +12,33 @@
 
 use crate::pac::BT_RFC;
 
+/// BT_RFC register byte offsets for the RFC command sequencer.
+mod reg {
+    pub const VCO_REG1: u16 = 0x00;
+    pub const VCO_REG2: u16 = 0x04;
+    pub const VCO_REG3: u16 = 0x08;
+    pub const RF_LODIST_REG: u16 = 0x10;
+    pub const FBDV_REG1: u16 = 0x14;
+    pub const PFDCP_REG: u16 = 0x1C;
+    pub const EDR_CAL_REG1: u16 = 0x24;
+    pub const OSLO_REG: u16 = 0x28;
+    pub const TRF_REG1: u16 = 0x34;
+    pub const TRF_REG2: u16 = 0x38;
+    pub const TRF_EDR_REG1: u16 = 0x3C;
+    pub const TRF_EDR_REG2: u16 = 0x40;
+    pub const RRF_REG: u16 = 0x44;
+    pub const RBB_REG1: u16 = 0x48;
+    pub const RBB_REG2: u16 = 0x4C;
+    pub const RBB_REG3: u16 = 0x50;
+    pub const RBB_REG5: u16 = 0x58;
+    pub const ADC_REG: u16 = 0x60;
+    pub const TBB_REG: u16 = 0x64;
+    pub const ATSTBUF_REG: u16 = 0x6C;
+    pub const INCCAL_REG1: u16 = 0x74;
+    pub const IQ_PWR_REG1: u16 = 0xA8;
+    pub const IQ_PWR_REG2: u16 = 0xAC;
+}
+
 // RFC command opcodes (16-bit instructions, two packed per 32-bit word)
 const fn rd(n: u16) -> u16 {
     0x1800 + n
@@ -82,112 +109,112 @@ fn build_rxon() -> CmdBuilder {
     let mut c = CmdBuilder::new();
 
     // VDDPSW/RFBG_EN/LO_IARY_EN
-    c.push(rd(0x10));
-    c.push(rd(0x10));
+    c.push(rd(reg::RF_LODIST_REG));
+    c.push(rd(reg::RF_LODIST_REG));
     c.push(or(18));
     c.push(or(17));
     c.push(or(16));
-    c.push(wr(0x10));
+    c.push(wr(reg::RF_LODIST_REG));
 
     // wait 1us
     c.push(wait(2));
 
     // FULCAL RSLT
     c.push(RD_FULCAL);
-    c.push(wr(0x08));
+    c.push(wr(reg::VCO_REG3));
 
     // VCO5G_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(or(12));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // PFDCP_EN
-    c.push(rd(0x1C));
+    c.push(rd(reg::PFDCP_REG));
     c.push(or(19));
-    c.push(wr(0x1C));
+    c.push(wr(reg::PFDCP_REG));
 
     // FBDV_EN
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(or(12));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // FBDV_RSTB
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(and(0x7));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // wait 30us for LO lock
     c.push(wait(45));
 
     // VCO_FLT_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(or(7));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // LDO11_EN & LNA_SHUNTSW
-    c.push(rd(0x44));
+    c.push(rd(reg::RRF_REG));
     c.push(or(22));
     c.push(and(6));
-    c.push(wr(0x44));
+    c.push(wr(reg::RRF_REG));
 
     // ADC & LDO_ADC & LDO_ADCREF
-    c.push(rd(0x60));
+    c.push(rd(reg::ADC_REG));
     c.push(or(4));
     c.push(or(9));
     c.push(or(21));
     c.push(or(20));
-    c.push(wr(0x60));
+    c.push(wr(reg::ADC_REG));
 
     // LDO_RBB
-    c.push(rd(0x48));
+    c.push(rd(reg::RBB_REG1));
     c.push(or(13));
-    c.push(wr(0x48));
+    c.push(wr(reg::RBB_REG1));
 
     // PA_TX_RX
-    c.push(rd(0x38));
+    c.push(rd(reg::TRF_REG2));
     c.push(and(9));
-    c.push(wr(0x38));
+    c.push(wr(reg::TRF_REG2));
 
     // EN_IARRAY & EN_OSDAC
-    c.push(rd(0x58));
+    c.push(rd(reg::RBB_REG5));
     c.push(or(5));
     c.push(or(6));
     c.push(or(7));
-    c.push(wr(0x58));
+    c.push(wr(reg::RBB_REG5));
 
     // EN_CBPF & EN_RVGA
-    c.push(rd(0x4C));
+    c.push(rd(reg::RBB_REG2));
     c.push(or(27));
     c.push(or(6));
     c.push(or(7));
-    c.push(wr(0x4C));
+    c.push(wr(reg::RBB_REG2));
 
     // EN_PKDET
-    c.push(rd(0x50));
+    c.push(rd(reg::RBB_REG3));
     c.push(or(0));
     c.push(or(1));
     c.push(or(2));
     c.push(or(3));
-    c.push(wr(0x50));
+    c.push(wr(reg::RBB_REG3));
 
     // wait 4us
     c.push(wait(5));
 
     // LODIST5G_RX_EN
-    c.push(rd(0x10));
+    c.push(rd(reg::RF_LODIST_REG));
     c.push(or(9));
-    c.push(wr(0x10));
+    c.push(wr(reg::RF_LODIST_REG));
 
     // LNA_PU & MX_PU
-    c.push(rd(0x44));
+    c.push(rd(reg::RRF_REG));
     c.push(or(3));
     c.push(or(17));
-    c.push(wr(0x44));
+    c.push(wr(reg::RRF_REG));
 
     // START INCCAL
-    c.push(rd(0x74));
+    c.push(rd(reg::INCCAL_REG1));
     c.push(or(29));
-    c.push(wr(0x74));
+    c.push(wr(reg::INCCAL_REG1));
 
     c.push(wait(30));
 
@@ -202,78 +229,78 @@ fn build_rxoff() -> CmdBuilder {
     let mut c = CmdBuilder::new();
 
     // VDDPSW/RFBG/LODIST5G_RX_EN/LO_IARY_EN
-    c.push(rd(0x10));
-    c.push(rd(0x10));
+    c.push(rd(reg::RF_LODIST_REG));
+    c.push(rd(reg::RF_LODIST_REG));
     c.push(and(18));
     c.push(and(17));
     c.push(and(16));
     c.push(and(9));
-    c.push(wr(0x10));
+    c.push(wr(reg::RF_LODIST_REG));
 
     // VCO5G_EN & VCO_FLT_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(and(12));
     c.push(and(7));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // FBDV_EN / FBDV_RSTB
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(and(12));
     c.push(or(0x7));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // PFDCP_EN
-    c.push(rd(0x1C));
+    c.push(rd(reg::PFDCP_REG));
     c.push(and(19));
-    c.push(wr(0x1C));
+    c.push(wr(reg::PFDCP_REG));
 
     // LNA_PU & MX_PU & LDO11_EN & LNA_SHUNTSW
-    c.push(rd(0x44));
+    c.push(rd(reg::RRF_REG));
     c.push(and(3));
     c.push(or(6));
     c.push(and(17));
     c.push(and(22));
-    c.push(wr(0x44));
+    c.push(wr(reg::RRF_REG));
 
     // ADC & LDO_ADC & LDO_ADCREF
-    c.push(rd(0x60));
+    c.push(rd(reg::ADC_REG));
     c.push(and(4));
     c.push(and(9));
     c.push(and(21));
     c.push(and(20));
-    c.push(wr(0x60));
+    c.push(wr(reg::ADC_REG));
 
     // LDO_RBB
-    c.push(rd(0x48));
+    c.push(rd(reg::RBB_REG1));
     c.push(and(13));
-    c.push(wr(0x48));
+    c.push(wr(reg::RBB_REG1));
 
     // PA_TX_RX
-    c.push(rd(0x38));
+    c.push(rd(reg::TRF_REG2));
     c.push(or(9));
-    c.push(wr(0x38));
+    c.push(wr(reg::TRF_REG2));
 
     // EN_IARRAY & EN_OSDAC
-    c.push(rd(0x58));
+    c.push(rd(reg::RBB_REG5));
     c.push(and(5));
     c.push(and(6));
     c.push(and(7));
-    c.push(wr(0x58));
+    c.push(wr(reg::RBB_REG5));
 
     // EN_CBPF & EN_RVGA
-    c.push(rd(0x4C));
+    c.push(rd(reg::RBB_REG2));
     c.push(and(27));
     c.push(and(6));
     c.push(and(7));
-    c.push(wr(0x4C));
+    c.push(wr(reg::RBB_REG2));
 
     // EN_PKDET
-    c.push(rd(0x50));
+    c.push(rd(reg::RBB_REG3));
     c.push(and(0));
     c.push(and(1));
     c.push(and(2));
     c.push(and(3));
-    c.push(wr(0x50));
+    c.push(wr(reg::RBB_REG3));
 
     // END
     c.push(END);
@@ -286,81 +313,81 @@ fn build_txon() -> CmdBuilder {
     let mut c = CmdBuilder::new();
 
     // VDDPSW/RFBG_EN/LO_IARY_EN
-    c.push(rd(0x10));
-    c.push(rd(0x10));
+    c.push(rd(reg::RF_LODIST_REG));
+    c.push(rd(reg::RF_LODIST_REG));
     c.push(or(17));
     c.push(or(18));
     c.push(or(16));
-    c.push(wr(0x10));
+    c.push(wr(reg::RF_LODIST_REG));
 
     // wait 1us
     c.push(wait(2));
 
     // RD FULCAL
     c.push(RD_FULCAL);
-    c.push(wr(0x08));
+    c.push(wr(reg::VCO_REG3));
 
     // VCO5G_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(or(12));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // FBDV_EN
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(or(12));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // PFDCP_EN
-    c.push(rd(0x1C));
+    c.push(rd(reg::PFDCP_REG));
     c.push(or(19));
-    c.push(wr(0x1C));
+    c.push(wr(reg::PFDCP_REG));
 
     // FBDV_RSTB
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(and(0x7));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // wait 30us for LO lock
     c.push(wait(30));
 
     // VCO_FLT_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(or(7));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // LODIST5G_BLETX_EN
-    c.push(rd(0x10));
+    c.push(rd(reg::RF_LODIST_REG));
     c.push(or(8));
-    c.push(wr(0x10));
+    c.push(wr(reg::RF_LODIST_REG));
 
     // EDR_IARRAY_EN
-    c.push(rd(0x3C));
+    c.push(rd(reg::TRF_EDR_REG1));
     c.push(or(20));
-    c.push(wr(0x3C));
+    c.push(wr(reg::TRF_EDR_REG1));
 
     // PA_BUF_PU for normal TX
-    c.push(rd(0x34));
+    c.push(rd(reg::TRF_REG1));
     c.push(or(22));
-    c.push(wr(0x34));
+    c.push(wr(reg::TRF_REG1));
 
     // EDR_XFMR_SG
-    c.push(rd(0x40));
+    c.push(rd(reg::TRF_EDR_REG2));
     c.push(and(11));
-    c.push(wr(0x40));
+    c.push(wr(reg::TRF_EDR_REG2));
 
     // wait 4us
     c.push(wait(5));
 
     // PA_OUT_PU & TRF_SIG_EN
-    c.push(rd(0x34));
+    c.push(rd(reg::TRF_REG1));
     c.push(or(16));
     c.push(or(21));
-    c.push(wr(0x34));
+    c.push(wr(reg::TRF_REG1));
 
     // START INCCAL
-    c.push(rd(0x74));
+    c.push(rd(reg::INCCAL_REG1));
     c.push(or(29));
-    c.push(wr(0x74));
+    c.push(wr(reg::INCCAL_REG1));
     c.push(wait(9));
 
     // END
@@ -374,118 +401,118 @@ fn build_txoff() -> CmdBuilder {
     let mut c = CmdBuilder::new();
 
     // VDDPSW/RFBG_EN/LO_IARY_EN/LODIST5G_BLETX_EN
-    c.push(rd(0x10));
-    c.push(rd(0x10));
+    c.push(rd(reg::RF_LODIST_REG));
+    c.push(rd(reg::RF_LODIST_REG));
     c.push(and(8));
     c.push(and(16));
     c.push(and(17));
     c.push(and(18));
-    c.push(wr(0x10));
+    c.push(wr(reg::RF_LODIST_REG));
 
     // VCO5G_EN & VCO_FLT_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(and(12));
     c.push(and(7));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // FBDV_EN / FBDV_RSTB
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(and(12));
     c.push(or(0x7));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // PFDCP_EN
-    c.push(rd(0x1C));
+    c.push(rd(reg::PFDCP_REG));
     c.push(and(19));
-    c.push(wr(0x1C));
+    c.push(wr(reg::PFDCP_REG));
 
     // PA_BUF_PU & PA_OUT_PU & TRF_SIG_EN
-    c.push(rd(0x34));
+    c.push(rd(reg::TRF_REG1));
     c.push(and(22));
     c.push(and(16));
     c.push(and(21));
-    c.push(wr(0x34));
+    c.push(wr(reg::TRF_REG1));
 
     // TRF_EDR_IARRAY_EN
-    c.push(rd(0x3C));
+    c.push(rd(reg::TRF_EDR_REG1));
     c.push(and(20));
-    c.push(wr(0x3C));
+    c.push(wr(reg::TRF_EDR_REG1));
 
     // Redundancy from bt_txoff:
     // DAC_STOP / EN_TBB_IARRY & EN_LDO_DAC_AVDD & EN_LDO_DAC_DVDD & EN_DAC
-    c.push(rd(0x64));
+    c.push(rd(reg::TBB_REG));
     c.push(and(8));
     c.push(and(9));
     c.push(and(10));
     c.push(and(11));
     c.push(and(12));
-    c.push(wr(0x64));
+    c.push(wr(reg::TBB_REG));
 
     // EDR_PACAP_EN & EDR_PA_XFMR_SG
-    c.push(rd(0x40));
+    c.push(rd(reg::TRF_EDR_REG2));
     c.push(and(11));
     c.push(and(17));
-    c.push(wr(0x40));
+    c.push(wr(reg::TRF_EDR_REG2));
 
     // TRF_EDR_IARRAY_EN
-    c.push(rd(0x3C));
+    c.push(rd(reg::TRF_EDR_REG1));
     c.push(and(2));
     c.push(and(12));
     c.push(and(19));
-    c.push(wr(0x3C));
+    c.push(wr(reg::TRF_EDR_REG1));
 
     // EDR_EN_OSLO
-    c.push(rd(0x28));
+    c.push(rd(reg::OSLO_REG));
     c.push(and(11));
-    c.push(wr(0x28));
+    c.push(wr(reg::OSLO_REG));
 
     // VCO3G_EN/EDR_VCO_FLT_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(and(13));
     c.push(and(7));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // EDR_FBDV_RSTB
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(or(7));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // EDR PFDCP_EN
-    c.push(rd(0x1C));
+    c.push(rd(reg::PFDCP_REG));
     c.push(and(19));
-    c.push(wr(0x1C));
+    c.push(wr(reg::PFDCP_REG));
 
     // EDR FBDV_EN/MOD_STG/SDM_CLK_SEL
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(and(12));
     c.push(or(5));
     c.push(and(4));
     c.push(or(3));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // ACAL_VH_SEL=3/ACAL_VL_SEL=1
-    c.push(rd(0x04));
+    c.push(rd(reg::VCO_REG2));
     c.push(and(2));
     c.push(and(6));
-    c.push(wr(0x04));
+    c.push(wr(reg::VCO_REG2));
 
     // LDO_RBB
-    c.push(rd(0x48));
+    c.push(rd(reg::RBB_REG1));
     c.push(and(13));
-    c.push(wr(0x48));
+    c.push(wr(reg::RBB_REG1));
 
     // EDR VCO3G_EN/EDR_VCO5G_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(and(13));
-    c.push(wr(0x24));
+    c.push(wr(reg::EDR_CAL_REG1));
 
     // VDDPSW/RFBG_EN/LO_IARY_EN/LODISTEDR_EN
-    c.push(rd(0x10));
+    c.push(rd(reg::RF_LODIST_REG));
     c.push(and(0));
     c.push(and(16));
     c.push(and(17));
     c.push(and(18));
-    c.push(wr(0x10));
+    c.push(wr(reg::RF_LODIST_REG));
 
     // END
     c.push(END);
@@ -498,154 +525,154 @@ fn build_bt_txon() -> CmdBuilder {
     let mut c = CmdBuilder::new();
 
     // VDDPSW/RFBG_EN/LO_IARY_EN
-    c.push(rd(0x10));
-    c.push(rd(0x10));
+    c.push(rd(reg::RF_LODIST_REG));
+    c.push(rd(reg::RF_LODIST_REG));
     c.push(or(16));
     c.push(or(17));
     c.push(or(18));
-    c.push(wr(0x10));
+    c.push(wr(reg::RF_LODIST_REG));
 
     // wait 1us
     c.push(wait(2));
 
     // LDO_RBB
-    c.push(rd(0x48));
+    c.push(rd(reg::RBB_REG1));
     c.push(or(13));
-    c.push(wr(0x48));
+    c.push(wr(reg::RBB_REG1));
 
     // RD FULCAL
     c.push(RD_FULCAL);
-    c.push(wr(0x24));
-    c.push(wr(0x6C));
+    c.push(wr(reg::EDR_CAL_REG1));
+    c.push(wr(reg::ATSTBUF_REG));
 
     // VCO3G_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(or(13));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // PFDCP_EN ICP_SET
-    c.push(rd(0x1C));
+    c.push(rd(reg::PFDCP_REG));
     c.push(or(19));
     c.push(or(11));
     c.push(and(13));
-    c.push(wr(0x1C));
+    c.push(wr(reg::PFDCP_REG));
 
     // FBDV_EN/MOD_STG/SDM_CLK_SEL
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(or(12));
     c.push(and(5));
     c.push(or(4));
     c.push(and(3));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // FBDV_RSTB
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(and(7));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // ACAL_VH_SEL=7/ACAL_VL_SEL=5
-    c.push(rd(0x04));
+    c.push(rd(reg::VCO_REG2));
     c.push(or(2));
     c.push(or(6));
-    c.push(wr(0x04));
+    c.push(wr(reg::VCO_REG2));
 
     // EDR_VCO_FLT_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(or(7));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // EDR_EN_OSLO
-    c.push(rd(0x28));
+    c.push(rd(reg::OSLO_REG));
     c.push(or(11));
-    c.push(wr(0x28));
+    c.push(wr(reg::OSLO_REG));
 
     // LODISTEDR_EN
-    c.push(rd(0x10));
+    c.push(rd(reg::RF_LODIST_REG));
     c.push(or(0));
-    c.push(wr(0x10));
+    c.push(wr(reg::RF_LODIST_REG));
 
     // EN_TBB_IARRY & EN_LDO_DAC_AVDD & EN_LDO_DAC_DVDD & EN_DAC
-    c.push(rd(0x64));
+    c.push(rd(reg::TBB_REG));
     c.push(or(8));
     c.push(or(9));
     c.push(or(10));
     c.push(or(11));
-    c.push(wr(0x64));
+    c.push(wr(reg::TBB_REG));
 
     // TRF_EDR_IARRAY_EN
-    c.push(rd(0x3C));
+    c.push(rd(reg::TRF_EDR_REG1));
     c.push(or(20));
-    c.push(wr(0x3C));
+    c.push(wr(reg::TRF_EDR_REG1));
 
     // EDR_PACAP_EN & EDR_PA_XFMR_SG
-    c.push(rd(0x40));
+    c.push(rd(reg::TRF_EDR_REG2));
     c.push(or(11));
     c.push(or(17));
-    c.push(wr(0x40));
+    c.push(wr(reg::TRF_EDR_REG2));
 
     // RD DCCAL
     c.push(RD_DCCAL1);
-    c.push(wr(0xA8));
+    c.push(wr(reg::IQ_PWR_REG1));
     c.push(RD_DCCAL2);
-    c.push(wr(0xAC));
+    c.push(wr(reg::IQ_PWR_REG2));
 
     // EDR_TMXBUF_PU EDR_TMX_PU
-    c.push(rd(0x3C));
+    c.push(rd(reg::TRF_EDR_REG1));
     c.push(or(12));
     c.push(or(19));
-    c.push(wr(0x3C));
+    c.push(wr(reg::TRF_EDR_REG1));
 
     // cmd for cal: RBB_REG5 EN_IARRAY
-    c.push(rd(0x58));
+    c.push(rd(reg::RBB_REG5));
     c.push(or(5));
-    c.push(wr(0x58));
+    c.push(wr(reg::RBB_REG5));
 
     // EN_RVGA_I
-    c.push(rd(0x4C));
+    c.push(rd(reg::RBB_REG2));
     c.push(or(7));
-    c.push(wr(0x4C));
+    c.push(wr(reg::RBB_REG2));
 
     // ADC & LDO_ADC & LDO_ADCREF
-    c.push(rd(0x60));
+    c.push(rd(reg::ADC_REG));
     c.push(or(4));
     c.push(or(9));
     c.push(or(21));
-    c.push(wr(0x60));
+    c.push(wr(reg::ADC_REG));
 
     // wait 5us
     c.push(wait(8));
 
     // pwrmtr_en
-    c.push(rd(0x40));
+    c.push(rd(reg::TRF_EDR_REG2));
     c.push(or(10));
-    c.push(wr(0x40));
+    c.push(wr(reg::TRF_EDR_REG2));
 
     // wait 3us
     c.push(wait(5));
 
     // lpbk en
-    c.push(rd(0x58));
+    c.push(rd(reg::RBB_REG5));
     c.push(or(0));
-    c.push(wr(0x58));
+    c.push(wr(reg::RBB_REG5));
 
     // wait 30us for LO lock
     c.push(wait(20));
 
     // START INCCAL
-    c.push(rd(0x74));
+    c.push(rd(reg::INCCAL_REG1));
     c.push(or(29));
-    c.push(wr(0x74));
+    c.push(wr(reg::INCCAL_REG1));
     c.push(wait(9));
 
     // DAC_START
-    c.push(rd(0x64));
+    c.push(rd(reg::TBB_REG));
     c.push(or(12));
-    c.push(wr(0x64));
+    c.push(wr(reg::TBB_REG));
 
     // EDR_PA_PU
-    c.push(rd(0x3C));
+    c.push(rd(reg::TRF_EDR_REG1));
     c.push(or(2));
-    c.push(wr(0x3C));
+    c.push(wr(reg::TRF_EDR_REG1));
 
     // END
     c.push(END);
@@ -658,145 +685,145 @@ fn build_bt_txoff() -> CmdBuilder {
     let mut c = CmdBuilder::new();
 
     // EDR_PA_PU / EDR_TMXBUF_PU / EDR_TMX_PU
-    c.push(rd(0x3C));
-    c.push(rd(0x3C));
+    c.push(rd(reg::TRF_EDR_REG1));
+    c.push(rd(reg::TRF_EDR_REG1));
     c.push(and(2));
     c.push(and(12));
     c.push(and(19));
-    c.push(wr(0x3C));
+    c.push(wr(reg::TRF_EDR_REG1));
 
     // DAC_STOP / EN_TBB_IARRY & EN_LDO_DAC_AVDD & EN_LDO_DAC_DVDD & EN_DAC
-    c.push(rd(0x64));
+    c.push(rd(reg::TBB_REG));
     c.push(and(8));
     c.push(and(9));
     c.push(and(10));
     c.push(and(11));
     c.push(and(12));
-    c.push(wr(0x64));
+    c.push(wr(reg::TBB_REG));
 
     // EDR_PACAP_EN & EDR_PA_XFMR_SG
-    c.push(rd(0x40));
+    c.push(rd(reg::TRF_EDR_REG2));
     c.push(and(11));
     c.push(and(17));
-    c.push(wr(0x40));
+    c.push(wr(reg::TRF_EDR_REG2));
 
     // cmd for cal: lpbk en
-    c.push(rd(0x58));
+    c.push(rd(reg::RBB_REG5));
     c.push(and(0));
-    c.push(wr(0x58));
+    c.push(wr(reg::RBB_REG5));
 
     // wait 1us
     c.push(wait(2));
 
     // pwrmtr_en
-    c.push(rd(0x40));
+    c.push(rd(reg::TRF_EDR_REG2));
     c.push(and(10));
-    c.push(wr(0x40));
+    c.push(wr(reg::TRF_EDR_REG2));
 
     // wait 1us
     c.push(wait(2));
 
     // EN_IARRAY
-    c.push(rd(0x58));
+    c.push(rd(reg::RBB_REG5));
     c.push(and(5));
-    c.push(wr(0x58));
+    c.push(wr(reg::RBB_REG5));
 
     // EN_RVGA_I
-    c.push(rd(0x4C));
+    c.push(rd(reg::RBB_REG2));
     c.push(and(7));
-    c.push(wr(0x4C));
+    c.push(wr(reg::RBB_REG2));
 
     // ADC & LDO_ADC & LDO_ADCREF
-    c.push(rd(0x60));
+    c.push(rd(reg::ADC_REG));
     c.push(and(4));
     c.push(and(9));
     c.push(and(21));
-    c.push(wr(0x60));
+    c.push(wr(reg::ADC_REG));
 
     // TRF_EDR_IARRAY_EN
-    c.push(rd(0x3C));
+    c.push(rd(reg::TRF_EDR_REG1));
     c.push(and(20));
-    c.push(wr(0x3C));
+    c.push(wr(reg::TRF_EDR_REG1));
 
     // EDR_EN_OSLO
-    c.push(rd(0x28));
+    c.push(rd(reg::OSLO_REG));
     c.push(and(11));
-    c.push(wr(0x28));
+    c.push(wr(reg::OSLO_REG));
 
     // VCO3G_EN/EDR_VCO_FLT_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(and(13));
     c.push(and(7));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // EDR_FBDV_RSTB
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(or(7));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // EDR PFDCP_EN ICP_SET
-    c.push(rd(0x1C));
+    c.push(rd(reg::PFDCP_REG));
     c.push(and(19));
     c.push(and(11));
     c.push(or(13));
-    c.push(wr(0x1C));
+    c.push(wr(reg::PFDCP_REG));
 
     // EDR FBDV_EN/MOD_STG/SDM_CLK_SEL
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(and(12));
     c.push(or(5));
     c.push(and(4));
     c.push(or(3));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // ACAL_VH_SEL=3/ACAL_VL_SEL=1
-    c.push(rd(0x04));
+    c.push(rd(reg::VCO_REG2));
     c.push(and(2));
     c.push(and(6));
-    c.push(wr(0x04));
+    c.push(wr(reg::VCO_REG2));
 
     // LDO_RBB
-    c.push(rd(0x48));
+    c.push(rd(reg::RBB_REG1));
     c.push(and(13));
-    c.push(wr(0x48));
+    c.push(wr(reg::RBB_REG1));
 
     // EDR VCO3G_EN/EDR_VCO5G_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(and(13));
-    c.push(wr(0x24));
+    c.push(wr(reg::EDR_CAL_REG1));
 
     // VDDPSW/RFBG_EN/LO_IARY_EN/LODISTEDR_EN
-    c.push(rd(0x10));
+    c.push(rd(reg::RF_LODIST_REG));
     c.push(and(0));
     c.push(and(16));
     c.push(and(17));
     c.push(and(18));
-    c.push(wr(0x10));
+    c.push(wr(reg::RF_LODIST_REG));
 
     // Redundant commands to fix control change while txoff:
     // VCO5G_EN & VCO_FLT_EN
-    c.push(rd(0x00));
+    c.push(rd(reg::VCO_REG1));
     c.push(and(12));
     c.push(and(7));
-    c.push(wr(0x00));
+    c.push(wr(reg::VCO_REG1));
 
     // FBDV_EN / FBDV_RSTB
-    c.push(rd(0x14));
+    c.push(rd(reg::FBDV_REG1));
     c.push(and(12));
     c.push(or(0x7));
-    c.push(wr(0x14));
+    c.push(wr(reg::FBDV_REG1));
 
     // PFDCP_EN
-    c.push(rd(0x1C));
+    c.push(rd(reg::PFDCP_REG));
     c.push(and(19));
-    c.push(wr(0x1C));
+    c.push(wr(reg::PFDCP_REG));
 
     // PA_BUF_PU & PA_OUT_PU & TRF_SIG_EN
-    c.push(rd(0x34));
+    c.push(rd(reg::TRF_REG1));
     c.push(and(22));
     c.push(and(16));
     c.push(and(21));
-    c.push(wr(0x34));
+    c.push(wr(reg::TRF_REG1));
 
     // END
     c.push(END);

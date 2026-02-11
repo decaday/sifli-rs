@@ -31,10 +31,10 @@ pub const NUM_POWER_LEVELS: usize = 7;
 const DMA_SAMPLE_COUNT: usize = 512;
 
 /// PHY RX dump source address (CPU cannot read this directly, DMA only)
-const PHY_RX_DUMP_ADDR: u32 = 0x400c_0000;
+const PHY_RX_DUMP_ADDR: u32 = super::super::memory_map::rf::PHY_RX_DUMP_ADDR;
 
 /// DMA buffer address in LPSYS EM memory (SDK: BT_RFC_TXDC_DMA_ADDR).
-const DMA_BUFFER_ADDR: u32 = 0x2040_8000;
+const DMA_BUFFER_ADDR: u32 = super::super::memory_map::shared::EM_START as u32;
 
 /// Cosine table for mixer demodulation (16-point period, Q10 format)
 const COS_TABLE: [i16; 16] = [

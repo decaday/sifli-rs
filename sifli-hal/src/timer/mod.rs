@@ -197,7 +197,7 @@ impl Instance for peripherals::BTIM2 {
 }
 impl BimInstance for peripherals::BTIM2 {}
 
-// DMA trait系统（使用 dma_trait! 宏自动生成 request() 方法）
+// DMA trait system (auto-generated request() method via dma_trait! macro)
 dma_trait!(UpdateDma, Instance);
 dma_trait!(TriggerDma, Instance);
 dma_trait!(Cc1Dma, Instance);
@@ -217,7 +217,7 @@ impl<T: Instance, D: UpdateDma<T>> UpDma<T> for D {}
 // impl Cc1Dma<peripherals::GPTIM2> for peripherals::DMAC1_CH2 {}
 // impl UpDma<peripherals::GPTIM2> for T where T: UpdateDma<peripherals::GPTIM2> {}
 
-// 模块声明
+// Module declarations
 pub mod low_level;
 pub mod simple_pwm;
 

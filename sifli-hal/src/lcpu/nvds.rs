@@ -6,7 +6,7 @@
 //!
 //! SDK equivalent: `bt_stack_nvds_init()` in `bf0_bt_common.c:318`.
 
-const NVDS_BUFF_START: usize = 0x2040_FE00;
+const NVDS_BUFF_START: usize = super::memory_map::shared::NVDS_BUFF_START;
 const NVDS_PATTERN: u32 = 0x4E56_4453; // "NVDS"
 
 mod tag {
@@ -34,7 +34,7 @@ pub(crate) fn write_default(bd_addr: &[u8; 6], use_lxt: bool) {
     let mut buf = [0u8; 64];
     let mut pos = 0;
 
-    // RC10K 模式额外参数（SDK: bf0_bt_nvds.c:119-125）
+    // RC10K mode extra parameters (SDK: bf0_bt_nvds.c:119-125)
     if !use_lxt {
         // Tag 0x0D: pre-wakeup time = 0x1964 (6500)
         buf[pos..pos + 4].copy_from_slice(&[tag::PRE_WAKEUP_TIME, 0x02, 0x64, 0x19]);

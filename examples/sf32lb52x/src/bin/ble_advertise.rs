@@ -1,15 +1,15 @@
-//! 使用 trouble-host BLE 栈进行蓝牙广播的示例。
+//! BLE advertising example using the trouble-host BLE stack.
 //!
-//! 广播设备名 "SiFli-BLE"，注册 Battery Service (0x180F)，
-//! 可被手机 BLE 扫描器（如 nRF Connect）发现并完成 Service Discovery。
+//! Advertises device name "SiFli-BLE", registers Battery Service (0x180F),
+//! discoverable by phone BLE scanners (e.g., nRF Connect) with Service Discovery.
 //!
-//! ## 启动流程
+//! ## Boot sequence
 //!
-//! 1. HAL 初始化
-//! 2. IPC 驱动 + HCI 队列创建
-//! 3. LCPU BLE 启动（固件加载、补丁安装、warmup 事件消费）
-//! 4. trouble-host Stack 初始化（含 GATT 服务）
-//! 5. 持续广播，接受连接，处理 GATT 事件，断开后重新广播
+//! 1. HAL initialization
+//! 2. IPC driver + HCI queue creation
+//! 3. LCPU BLE startup (firmware load, patch install, warmup event consumption)
+//! 4. trouble-host Stack initialization (with GATT services)
+//! 5. Continuous advertising, accept connections, handle GATT events, re-advertise on disconnect
 
 #![no_std]
 #![no_main]
@@ -31,7 +31,7 @@ bind_interrupts!(struct Irqs {
     MAILBOX2_CH1 => ipc::InterruptHandler;
 });
 
-/// GATT 服务定义：Battery Service (UUID 0x180F)
+/// GATT service definition: Battery Service (UUID 0x180F)
 #[gatt_server]
 struct Server {
     battery_service: BatteryService,
@@ -49,7 +49,7 @@ async fn main(_spawner: embassy_executor::Spawner) {
 
     info!("=== BLE Advertise Example ===");
 
-    // 1. 创建 IPC driver 和 HCI queue
+    // 1. Create IPC driver and HCI queue
     let mut ipc_driver = ipc::Ipc::new(p.MAILBOX1_CH1, Irqs, ipc::Config::default());
     let queue = match ipc_driver.open_queue(ipc::QueueConfig::qid0_hci()) {
         Ok(q) => q,
@@ -62,7 +62,7 @@ async fn main(_spawner: embassy_executor::Spawner) {
         }
     };
 
-    // 2. BLE 启动
+    // 2. BLE startup
     let (mut rx, tx) = queue.split();
     let lcpu = Lcpu::new(p.LPSYS_AON);
     if let Err(e) = lcpu
@@ -77,11 +77,11 @@ async fn main(_spawner: embassy_executor::Spawner) {
     }
     info!("LCPU BLE is ready");
 
-    // 3. 创建 HCI transport 和 controller
+    // 3. Create HCI transport and controller
     let transport = IpcHciTransport::from_parts(rx, tx);
     let controller: ExternalController<_, 4> = ExternalController::new(transport);
 
-    // 4. 初始化 trouble-host Stack
+    // 4. Initialize trouble-host Stack
     let address = Address::random([0xC0, 0x12, 0x34, 0x56, 0x78, 0x9A]);
     info!("Address: {:?}", address);
 
@@ -93,14 +93,14 @@ async fn main(_spawner: embassy_executor::Spawner) {
         ..
     } = stack.build();
 
-    // 5. 创建 GATT 服务器
+    // 5. Create GATT server
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
         name: "SiFli-BLE",
         appearance: &appearance::UNKNOWN,
     }))
     .unwrap();
 
-    // 6. runner + 广播/连接循环并发运行
+    // 6. Run runner + advertise/connect loop concurrently
     info!("Starting advertising...");
     let _ = join(
         async {
@@ -112,11 +112,11 @@ async fn main(_spawner: embassy_executor::Spawner) {
         },
         async {
             loop {
-                // 广播
+                // Advertise
                 match advertise(&mut peripheral, &server).await {
                     Ok(conn) => {
                         info!("Connected!");
-                        // GATT 事件处理 + 电量通知 并发运行
+                        // Run GATT event handling + battery notification concurrently
                         let gatt_task = gatt_events_task(&server, &conn);
                         let notify_task = notification_task(&server, &conn);
                         select(gatt_task, notify_task).await;
@@ -133,7 +133,7 @@ async fn main(_spawner: embassy_executor::Spawner) {
     .await;
 }
 
-/// 广播并等待连接
+/// Advertise and wait for connection.
 async fn advertise<'values, 'server, C: Controller>(
     peripheral: &mut Peripheral<'values, C, DefaultPacketPool>,
     server: &'server Server<'values>,
@@ -168,11 +168,8 @@ async fn advertise<'values, 'server, C: Controller>(
     Ok(conn)
 }
 
-/// GATT 事件处理任务
-async fn gatt_events_task(
-    server: &Server<'_>,
-    conn: &GattConnection<'_, '_, DefaultPacketPool>,
-) {
+/// GATT event handling task.
+async fn gatt_events_task(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) {
     let level = server.battery_service.level;
     loop {
         match conn.next().await {
@@ -203,11 +200,8 @@ async fn gatt_events_task(
     }
 }
 
-/// 电池电量通知任务：每 30 秒发送一次通知
-async fn notification_task(
-    server: &Server<'_>,
-    conn: &GattConnection<'_, '_, DefaultPacketPool>,
-) {
+/// Battery level notification task: sends notification every 30 seconds.
+async fn notification_task(server: &Server<'_>, conn: &GattConnection<'_, '_, DefaultPacketPool>) {
     let level = server.battery_service.level;
     let mut battery = 100u8;
     loop {

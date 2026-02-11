@@ -1,12 +1,12 @@
-//! MPU 配置（HCPU）。
+//! MPU configuration (HCPU).
 //!
-//! 目前最关键的目标：让跨核共享 SRAM（HPSYS/LPSYS）为 non-cacheable，
-//! 以匹配 SiFli SDK `mpu_config()` 的行为，避免 IPC ring buffer 因 DCache 产生不一致。
+//! Primary goal: make cross-core shared SRAM (HPSYS/LPSYS) non-cacheable,
+//! matching SiFli SDK `mpu_config()` behavior to prevent IPC ring buffer inconsistency from DCache.
 
 use core::ptr;
 use cortex_m::asm;
 
-/// SiFli SDK `mpu_armv8.h`: `ARM_MPU_ATTR_NON_CACHEABLE=4`, `ARM_MPU_ATTR(O,I)=(O<<4)|I`（当 O!=0）。
+/// SiFli SDK `mpu_armv8.h`: `ARM_MPU_ATTR_NON_CACHEABLE=4`, `ARM_MPU_ATTR(O,I)=(O<<4)|I` (when O!=0).
 const ATTR_NON_CACHEABLE_NORMAL: u32 = 0x44;
 
 // `core_cm33.h`
@@ -33,20 +33,20 @@ const fn mpu_rlar(limit: u32, attr_idx: u32) -> u32 {
     (limit & 0xFFFF_FFE0) | ((attr_idx & 0x7) << 1) | 1
 }
 
-/// 让跨核共享 SRAM 变为 non-cacheable（最小子集）。
+/// Make cross-core shared SRAM non-cacheable (minimal subset).
 ///
 /// - HPSYS SRAM: `0x2000_0000..=0x2027_FFFF`
 /// - LPSYS SRAM: `0x203F_C000..=0x204F_FFFF`
 ///
-/// 这两个范围覆盖 52x 的 mailbox IPC ring buffers（`0x2007_FC00..` / `0x2040_2800..` 等）。
+/// These two ranges cover the 52x mailbox IPC ring buffers (`0x2007_FC00..` / `0x2040_2800..` etc.).
 pub(crate) unsafe fn init() {
     let mpu = &*cortex_m::peripheral::MPU::PTR;
 
-    // 确保后续 MPU 配置生效。
+    // Ensure subsequent MPU configuration takes effect.
     asm::dsb();
     asm::isb();
 
-    // 先关 MPU。
+    // Disable MPU first.
     mpu.ctrl.write(0);
     asm::dsb();
     asm::isb();
@@ -64,14 +64,14 @@ pub(crate) unsafe fn init() {
     mpu.rbar.write(mpu_rbar(0x203F_C000, MPU_RBAR_SH_NON, MPU_RBAR_AP_RW_ANY, false));
     ptr::write_volatile(MPU_RLAR, mpu_rlar(0x204F_FFFF, 0));
 
-    // 开启 MPU：保留默认内存映射（PRIVDEFENA），避免未覆盖区域直接 fault。
+    // Enable MPU: preserve default memory map (PRIVDEFENA) to prevent faults on uncovered regions.
     mpu.ctrl
         .write(MPU_CTRL_ENABLE | MPU_CTRL_HFNMIENA | MPU_CTRL_PRIVDEFENA);
 
     asm::dsb();
     asm::isb();
 
-    // 便于在日志中确认 MPU 确实已配置/生效。
+    // Log for confirming MPU is configured and active.
     let ctrl = mpu.ctrl.read();
     let mair0 = ptr::read_volatile(MPU_MAIR0);
     mpu.rnr.write(0);

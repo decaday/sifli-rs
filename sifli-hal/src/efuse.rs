@@ -258,7 +258,14 @@ fn read_rf_cal_params() -> Option<RfCalParams> {
         return None;
     }
 
-    let params = RfCalParams {
+    Some(parse_rf_cal_params(&data))
+}
+
+/// Parse RF calibration parameters from raw eFUSE data.
+///
+/// Exposed separately for unit testing.
+pub(crate) fn parse_rf_cal_params(data: &[u8]) -> RfCalParams {
+    RfCalParams {
         // efuse_data[15] bit 5
         edr_cal_flag: (data[15] & 0x20) != 0,
         // efuse_data[15] bit 6-7
@@ -271,7 +278,6 @@ fn read_rf_cal_params() -> Option<RfCalParams> {
         tmxcap_sel_7_8: (data[16] & 0x78) >> 3,
         // efuse_data[16] bit 7 + efuse_data[17] bit 0-2
         tmxcap_sel_0: ((data[16] & 0x80) >> 7) | ((data[17] & 0x07) << 1),
-    };
-
-    Some(params)
+    }
 }
+
