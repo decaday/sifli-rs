@@ -6,7 +6,7 @@
 //! # fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
 //! let p = sifli_hal::init(Default::default());
 //! let cfg = LcpuConfig::default();
-//! let lcpu = Lcpu::new(p.LPSYS_AON);
+//! let lcpu = Lcpu::new();
 //! lcpu.power_on(&cfg, p.DMAC2_CH8)?;
 //! # Ok(()) }
 //! ```
@@ -27,7 +27,6 @@ pub mod bt_rf_cal;
 use core::fmt;
 
 use crate::dma::Channel;
-use crate::peripherals;
 use crate::syscfg;
 use crate::Peripheral;
 use crate::{lpaon, patch, rcc};
@@ -207,22 +206,18 @@ pub enum CoreId {
 //=============================================================================
 
 /// LCPU driver (blocking).
-pub struct Lcpu<'d> {
-    lpaon: lpaon::LpAon<'d, peripherals::LPSYS_AON>,
-}
+pub struct Lcpu;
 
-impl<'d> fmt::Debug for Lcpu<'d> {
+impl fmt::Debug for Lcpu {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Lcpu").finish_non_exhaustive()
     }
 }
 
-impl<'d> Lcpu<'d> {
+impl Lcpu {
     /// Create a new blocking LCPU driver.
-    pub fn new(lpsys_aon: impl Peripheral<P = peripherals::LPSYS_AON> + 'd) -> Self {
-        Self {
-            lpaon: lpaon::LpAon::new(lpsys_aon),
-        }
+    pub fn new() -> Self {
+        Self
     }
 }
 
@@ -230,7 +225,7 @@ impl<'d> Lcpu<'d> {
 // Power-on flow
 //=============================================================================
 
-impl<'d> Lcpu<'d> {
+impl Lcpu {
     /// BLE boot sequence (async).
     ///
     /// Compared to [`power_on`](Self::power_on), this method additionally:
@@ -262,7 +257,7 @@ impl<'d> Lcpu<'d> {
     /// ```no_run
     /// # async fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
     /// # let p = sifli_hal::init(Default::default());
-    /// # let lcpu = sifli_hal::lcpu::Lcpu::new(p.LPSYS_AON);
+    /// # let lcpu = sifli_hal::lcpu::Lcpu::new();
     /// # let mut hci_rx: sifli_hal::ipc::IpcQueueRx = todo!();
     /// use sifli_hal::lcpu::LcpuConfig;
     ///
@@ -349,7 +344,7 @@ impl<'d> Lcpu<'d> {
             "Step 6: Configuring LCPU start address (0x{:08X})",
             LpsysRam::CODE_START
         );
-        self.lpaon.configure_lcpu_start();
+        lpaon::configure_lcpu_start();
 
         // 7. Install patches and perform RF calibration (bf0_lcpu_init.c:185).
         debug!("Step 7: Installing patches and RF calibration");
@@ -380,9 +375,9 @@ impl<'d> Lcpu<'d> {
 
     fn reset_and_halt_lcpu(&self) -> Result<(), LcpuError> {
         // Only perform reset flow when CPUWAIT is not set.
-        if !self.lpaon.cpuwait() {
+        if !lpaon::cpuwait() {
             // 1. Set CPUWAIT so LCPU stays halted.
-            self.lpaon.set_cpuwait(true);
+            lpaon::set_cpuwait(true);
 
             // 2. Reset LCPU and MAC (SF32LB52X requires both).
             rcc::set_lp_lcpu_reset(true);
@@ -392,9 +387,9 @@ impl<'d> Lcpu<'d> {
             while !rcc::lp_lcpu_reset_asserted() || !rcc::lp_mac_reset_asserted() {}
 
             // 3. If LPSYS is sleeping, wake it up.
-            if self.lpaon.sleep_status() {
-                self.lpaon.set_wkup_req(true);
-                while self.lpaon.sleep_status() {}
+            if lpaon::sleep_status() {
+                lpaon::set_wkup_req(true);
+                while lpaon::sleep_status() {}
             }
 
             // 4. Clear reset bits, keep CPUWAIT = 1.
@@ -407,7 +402,7 @@ impl<'d> Lcpu<'d> {
 
     fn release_lcpu(&self) -> Result<(), LcpuError> {
         // Clear CPUWAIT so LCPU can run.
-        self.lpaon.set_cpuwait(false);
+        lpaon::set_cpuwait(false);
 
         Ok(())
     }
@@ -526,15 +521,15 @@ where
     let mut header = [0u8; 3];
     read_exact(rx, &mut header).await?;
 
-    info!(
-        "Warmup header: {:02X} {:02X} {:02X}",
+    debug!(
+        "[hci] warmup header: {:02X} {:02X} {:02X}",
         header[0], header[1], header[2]
     );
 
     // Verify it's an HCI Event
     if header[0] != 0x04 {
         warn!(
-            "Unexpected H4 indicator in warmup: 0x{:02X}, expected 0x04",
+            "[hci] unexpected H4 indicator in warmup: 0x{:02X}, expected 0x04",
             header[0]
         );
     }
@@ -544,14 +539,14 @@ where
     if param_len > 0 {
         let mut params = [0u8; 255];
         read_exact(rx, &mut params[..param_len]).await?;
-        info!(
-            "Warmup params ({} bytes): {:02X}",
+        debug!(
+            "[hci] warmup params ({} bytes): {:02X}",
             param_len,
             &params[..param_len]
         );
     }
 
-    info!("BT warmup event consumed OK");
+    debug!("[hci] warmup event consumed");
     Ok(())
 }
 
@@ -564,12 +559,12 @@ where
     while offset < buf.len() {
         match rx.read(&mut buf[offset..]).await {
             Ok(0) => {
-                error!("Unexpected EOF while reading warmup event");
+                error!("[hci] unexpected EOF while reading warmup event");
                 return Err(LcpuError::WarmupReadError);
             }
             Ok(n) => offset += n,
             Err(_e) => {
-                error!("Read error while consuming warmup event");
+                error!("[hci] read error while consuming warmup event");
                 return Err(LcpuError::WarmupReadError);
             }
         }

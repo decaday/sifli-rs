@@ -64,7 +64,7 @@ async fn main(_spawner: embassy_executor::Spawner) {
 
     // 2. BLE startup
     let (mut rx, tx) = queue.split();
-    let lcpu = Lcpu::new(p.LPSYS_AON);
+    let lcpu = Lcpu::new();
     if let Err(e) = lcpu
         .ble_power_on(&LcpuConfig::default(), p.DMAC2_CH8, &mut rx)
         .await
