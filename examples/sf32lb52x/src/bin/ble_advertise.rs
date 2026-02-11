@@ -24,7 +24,8 @@ use panic_probe as _;
 use trouble_host::prelude::*;
 
 use sifli_hal::bt_hci::IpcHciTransport;
-use sifli_hal::lcpu::{Lcpu, LcpuConfig};
+use sifli_hal::lcpu::LcpuConfig;
+use sifli_hal::rng::Rng;
 use sifli_hal::{bind_interrupts, ipc};
 
 bind_interrupts!(struct Irqs {
@@ -49,58 +50,48 @@ async fn main(_spawner: embassy_executor::Spawner) {
 
     info!("=== BLE Advertise Example ===");
 
-    // 1. Create IPC driver and HCI queue
-    let mut ipc_driver = ipc::Ipc::new(p.MAILBOX1_CH1, Irqs, ipc::Config::default());
-    let queue = match ipc_driver.open_queue(ipc::QueueConfig::qid0_hci()) {
-        Ok(q) => q,
-        Err(e) => {
-            error!("open_queue failed: {:?}", e);
-            cortex_m::asm::bkpt();
-            loop {
-                Timer::after_secs(1).await;
+    // 1. BLE startup (IPC + LCPU power-on + HCI transport)
+    let transport =
+        match IpcHciTransport::ble_init(p.MAILBOX1_CH1, Irqs, p.DMAC2_CH8, &LcpuConfig::default())
+            .await
+        {
+            Ok(t) => t,
+            Err(e) => {
+                error!("BLE init failed: {:?}", e);
+                cortex_m::asm::bkpt();
+                loop {
+                    Timer::after_secs(1).await;
+                }
             }
-        }
-    };
-
-    // 2. BLE startup
-    let (mut rx, tx) = queue.split();
-    let lcpu = Lcpu::new();
-    if let Err(e) = lcpu
-        .ble_power_on(&LcpuConfig::default(), p.DMAC2_CH8, &mut rx)
-        .await
-    {
-        error!("ble_power_on failed: {:?}", e);
-        cortex_m::asm::bkpt();
-        loop {
-            Timer::after_secs(1).await;
-        }
-    }
+        };
     info!("LCPU BLE is ready");
 
-    // 3. Create HCI transport and controller
-    let transport = IpcHciTransport::from_parts(rx, tx);
+    // 2. Create HCI controller
     let controller: ExternalController<_, 4> = ExternalController::new(transport);
 
-    // 4. Initialize trouble-host Stack
+    // 3. Initialize trouble-host Stack
     let address = Address::random([0xC0, 0x12, 0x34, 0x56, 0x78, 0x9A]);
     info!("Address: {:?}", address);
 
+    let mut rng = Rng::new_blocking(p.TRNG);
     let mut resources: HostResources<DefaultPacketPool, 1, 2> = HostResources::new();
-    let stack = trouble_host::new(controller, &mut resources).set_random_address(address);
+    let stack = trouble_host::new(controller, &mut resources)
+        .set_random_address(address)
+        .set_random_generator_seed(&mut rng);
     let Host {
         mut peripheral,
         mut runner,
         ..
     } = stack.build();
 
-    // 5. Create GATT server
+    // 4. Create GATT server
     let server = Server::new_with_config(GapConfig::Peripheral(PeripheralConfig {
         name: "SiFli-BLE",
         appearance: &appearance::UNKNOWN,
     }))
     .unwrap();
 
-    // 6. Run runner + advertise/connect loop concurrently
+    // 5. Run runner + advertise/connect loop concurrently
     info!("Starting advertising...");
     let _ = join(
         async {

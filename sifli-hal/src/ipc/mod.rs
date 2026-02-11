@@ -346,14 +346,6 @@ impl<'d> Ipc<'d> {
 
             // SDK behavior: don't read RX ring buffer on open (peer may not be initialized yet).
             st.rx_len.store(0, Ordering::Release);
-            debug!(
-                "IPC open_queue: qid={} rx=0x{:08X} tx=0x{:08X} tx_alias=0x{:08X} tx_size={}",
-                cfg.qid,
-                cfg.rx_buf_addr as u32,
-                cfg.tx_buf_addr as u32,
-                cfg.tx_buf_addr_alias as u32,
-                cfg.tx_buf_size,
-            );
 
             // Unmask: per SDK semantics, unmask qid on TX mailbox; also unmask RX side to reduce missed interrupts.
             let qid_mask = 1u16 << cfg.qid;
@@ -494,14 +486,6 @@ impl IpcQueueRx {
         if st.rx_len.load(Ordering::Acquire) == 0 {
             return Ok(0);
         }
-
-        debug!(
-            "IPC read: qid={} rx_ptr=0x{:08X} rx_len={} out_len={}",
-            self.qid,
-            rx_ptr as u32,
-            st.rx_len.load(Ordering::Acquire),
-            out.len()
-        );
 
         let cb = rx_ptr as *mut CircularBuf;
         let n = critical_section::with(|_| {

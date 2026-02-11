@@ -57,7 +57,8 @@ embedded-storage = { version = "0.3" }
 embedded-storage-async = { version = "0.4.1" }
 portable-atomic = { version = "1.11.1", features = ["require-cas"] }
 
-bt-hci = { version = "0.7", optional = true }
+bt-hci = { version = "0.8", optional = true }
+rand_core = { version = "0.6" }
 
 [build-dependencies]
 serde = { version = "1.0", features = ["derive"] }

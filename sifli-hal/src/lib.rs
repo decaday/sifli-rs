@@ -1,6 +1,5 @@
 #![no_std]
 #![doc = include_str!("../README.md")]
-#![allow(unsafe_op_in_unsafe_fn)]
 
 // This mod MUST go first, so that the others see its macros.
 pub(crate) mod fmt;
@@ -32,8 +31,9 @@ pub mod ipc;
 #[cfg(feature = "usb")]
 pub mod usb;
 pub mod efuse;
+pub mod rng;
 pub mod lcpu;
-pub mod lpaon;
+pub(crate) mod lpaon;
 #[cfg(feature = "_time-driver")]
 pub mod time_driver;
 #[cfg(feature = "bt-hci")]

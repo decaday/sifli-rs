@@ -34,7 +34,10 @@ use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::mutex::Mutex;
 use embedded_io::ReadExactError;
 
-use crate::ipc::{Error as IpcError, IpcQueue, IpcQueueRx, IpcQueueTx};
+use crate::dma::Channel;
+use crate::ipc::{self, Error as IpcError, IpcQueue, IpcQueueRx, IpcQueueTx};
+use crate::lcpu::{Lcpu, LcpuConfig, LcpuError};
+use crate::{interrupt, peripherals, Peripheral};
 
 #[cfg(any(feature = "defmt", feature = "log"))]
 /// Temporary buffer for logging HCI writes.
@@ -95,7 +98,7 @@ impl<'a> LoggingReader<'a> {
 
     fn dump(&self, prefix: &str) {
         let end = self.pos.min(64);
-        info!("{} ({} bytes): {:02X}", prefix, self.pos, &self.log[..end]);
+        debug!("[hci] {} ({} bytes): {:02X}", prefix, self.pos, &self.log[..end]);
     }
 }
 
@@ -116,6 +119,37 @@ impl embedded_io_async::Read for LoggingReader<'_> {
         }
         self.pos += n;
         Ok(n)
+    }
+}
+
+/// Error returned by [`IpcHciTransport::ble_init`].
+#[derive(Debug)]
+pub enum BleInitError {
+    /// IPC queue open error.
+    Ipc(IpcError),
+    /// LCPU power-on error.
+    Lcpu(LcpuError),
+}
+
+#[cfg(feature = "defmt")]
+impl defmt::Format for BleInitError {
+    fn format(&self, f: defmt::Formatter) {
+        match self {
+            BleInitError::Ipc(e) => defmt::write!(f, "IPC error: {}", e),
+            BleInitError::Lcpu(e) => defmt::write!(f, "LCPU error: {:?}", defmt::Debug2Format(e)),
+        }
+    }
+}
+
+impl From<IpcError> for BleInitError {
+    fn from(e: IpcError) -> Self {
+        Self::Ipc(e)
+    }
+}
+
+impl From<LcpuError> for BleInitError {
+    fn from(e: LcpuError) -> Self {
+        Self::Lcpu(e)
     }
 }
 
@@ -192,6 +226,45 @@ pub struct IpcHciTransport {
 }
 
 impl IpcHciTransport {
+    /// Initialize BLE and create an HCI transport in one step.
+    ///
+    /// This combines IPC queue creation, LCPU BLE power-on, and transport
+    /// construction into a single call.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use sifli_hal::{bind_interrupts, ipc, bt_hci::IpcHciTransport};
+    /// use sifli_hal::lcpu::LcpuConfig;
+    ///
+    /// bind_interrupts!(struct Irqs {
+    ///     MAILBOX2_CH1 => ipc::InterruptHandler;
+    /// });
+    ///
+    /// async fn example() {
+    ///     let p = sifli_hal::init(Default::default());
+    ///     let transport = IpcHciTransport::ble_init(
+    ///         p.MAILBOX1_CH1, Irqs, p.DMAC2_CH8, &LcpuConfig::default(),
+    ///     ).await.unwrap();
+    /// }
+    /// ```
+    pub async fn ble_init(
+        mailbox: impl Peripheral<P = peripherals::MAILBOX1_CH1>,
+        irq: impl interrupt::typelevel::Binding<
+            interrupt::typelevel::MAILBOX2_CH1,
+            ipc::InterruptHandler,
+        >,
+        dma_ch: impl Peripheral<P = impl Channel>,
+        config: &LcpuConfig,
+    ) -> Result<Self, BleInitError> {
+        let mut ipc_driver = ipc::Ipc::new(mailbox, irq, ipc::Config::default());
+        let queue = ipc_driver.open_queue(ipc::QueueConfig::qid0_hci())?;
+        let (mut rx, tx) = queue.split();
+        let lcpu = Lcpu::new();
+        lcpu.ble_power_on(config, dma_ch, &mut rx).await?;
+        Ok(Self::from_parts(rx, tx))
+    }
+
     /// Create a new IPC HCI Transport.
     pub fn new(queue: IpcQueue) -> Self {
         let (rx, tx) = queue.split();
@@ -236,7 +309,7 @@ impl Transport for IpcHciTransport {
             let pkt = ControllerToHostPacket::read_hci_async(&mut logging_rx, rx)
                 .await
                 .map_err(Error::Read)?;
-            logging_rx.dump("HCI RX");
+            logging_rx.dump("rx");
             Ok(pkt)
         }
 
@@ -257,14 +330,14 @@ impl Transport for IpcHciTransport {
             let end = s.len().min(64);
             if s.len() >= 4 && s[0] == 0x01 {
                 let opcode = (s[2] as u16) << 8 | s[1] as u16;
-                info!(
-                    "HCI TX cmd(0x{:04X}) len={}: {:02X}",
+                debug!(
+                    "[hci] tx cmd(0x{:04X}) {} bytes: {:02X}",
                     opcode,
                     s.len(),
                     &s[..end]
                 );
             } else {
-                info!("HCI TX len={}: {:02X}", s.len(), &s[..end]);
+                debug!("[hci] tx {} bytes: {:02X}", s.len(), &s[..end]);
             }
         }
 
