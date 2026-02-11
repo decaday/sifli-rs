@@ -41,21 +41,19 @@ bind_interrupts!(struct Irqs {
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     info!("Hello World! USB HID TEST");
-    let mut config = sifli_hal::Config::default();
+
     // Configure 240MHz system clock using DLL1
     // DLL1 Freq = (stg + 1) * 24MHz = (9 + 1) * 24MHz = 240MHz
-    config.rcc.sys = Sysclk::Dll1;
-    config.rcc.dll1 = Some(Dll {
-        out_div2: false,
-        stg: DllStage::Mul10,
-    });
-    // Configure DLL2 for USB at 240MHz
-    // USB will be 240MHz / 4 = 60MHz (required by USB PHY)
-    config.rcc.dll2 = Some(Dll {
-        out_div2: false,
-        stg: DllStage::Mul10,
-    });
-    config.rcc.mux.usbsel = Usbsel::Dll2;
+    // DLL2 for USB at 240MHz, USB = 240MHz / 4 = 60MHz (required by USB PHY)
+    let config = sifli_hal::Config::default()
+        .with_rcc(const {
+            sifli_hal::rcc::ConfigBuilder::new()
+                .with_sys(Sysclk::Dll1)
+                .with_dll1(Dll::new().with_stg(DllStage::Mul10))
+                .with_dll2(Dll::new().with_stg(DllStage::Mul10))
+                .with_mux(sifli_hal::rcc::ClockMux::new().with_usbsel(Usbsel::Dll2))
+                .checked()
+        });
     let p = sifli_hal::init(config);
 
     sifli_hal::rcc::test_print_clocks();

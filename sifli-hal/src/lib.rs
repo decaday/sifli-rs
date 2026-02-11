@@ -85,9 +85,21 @@ pub mod config {
     impl Default for Config {
         fn default() -> Self {
             Self {
-                rcc: rcc::Config::default(),
+                rcc: const { rcc::ConfigBuilder::new().checked() },
                 gpio1_it_priority: interrupt::Priority::P3,
             }
+        }
+    }
+
+    impl Config {
+        pub fn with_rcc(mut self, rcc: rcc::Config) -> Self {
+            self.rcc = rcc;
+            self
+        }
+
+        pub fn with_gpio1_it_priority(mut self, p: interrupt::Priority) -> Self {
+            self.gpio1_it_priority = p;
+            self
         }
     }
 }

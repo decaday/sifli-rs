@@ -20,24 +20,22 @@ use sifli_hal::rcc::{self, Dll, DllStage, Sysclk};
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
     info!("Hello World!");
-    let mut config = sifli_hal::Config::default();
 
     // Configure 240MHz system clock using DLL1
     // DLL1 Freq = (stg + 1) * 24MHz = (15 + 1) * 24MHz = 384MHz
     // DLL2 Freq = (stg + 1) * 24MHz = (9 + 1) * 24MHz = 240MHz
     // Hclk Freq = Dll1 / hdiv = 192MHz
     // Usbclk Freq = Dll2 / 4(usb_div_internal) = 60MHz(IMMUTABLE)
-    config.rcc.sys = Sysclk::Dll1;
-    config.rcc.dll1 = Some(Dll {
-        out_div2: false,
-        stg: DllStage::Mul16, // Mul16 = enum value 15
-    });
-    config.rcc.dll2 = Some(Dll {
-        out_div2: false,
-        stg: DllStage::Mul10, // Mul10 = enum value 9
-    });
-    config.rcc.hdiv = rcc::HclkPrescaler(2);
-    config.rcc.mux.usbsel = rcc::Usbsel::Dll2;
+    let config = sifli_hal::Config::default()
+        .with_rcc(const {
+            rcc::ConfigBuilder::new()
+                .with_sys(Sysclk::Dll1)
+                .with_dll1(Dll::new().with_stg(DllStage::Mul16))
+                .with_dll2(Dll::new().with_stg(DllStage::Mul10))
+                .with_hdiv(rcc::HclkPrescaler::new(2))
+                .with_mux(rcc::ClockMux::new().with_usbsel(rcc::Usbsel::Dll2))
+                .checked()
+        });
 
     let p = sifli_hal::init(config);
 
