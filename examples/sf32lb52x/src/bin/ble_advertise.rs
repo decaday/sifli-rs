@@ -140,9 +140,11 @@ async fn advertise<'values, 'server, C: Controller>(
     )
     .unwrap();
 
-    let mut params = AdvertisementParameters::default();
-    params.interval_min = Duration::from_millis(100);
-    params.interval_max = Duration::from_millis(100);
+    let params = AdvertisementParameters {
+        interval_min: Duration::from_millis(100),
+        interval_max: Duration::from_millis(100),
+        ..Default::default()
+    };
 
     let acceptor = peripheral
         .advertise(

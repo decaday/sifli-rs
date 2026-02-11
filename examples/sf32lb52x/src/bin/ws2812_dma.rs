@@ -85,7 +85,7 @@ async fn main(_spawner: Spawner) {
         Timer::after_micros(80).await;
         
         // Print every 30 degrees (reduce output)
-        if hue % 30 == 0 {
+        if hue.is_multiple_of(30) {
             let _ = writeln!(usart, "Hue: {:3}° -> RGB({:3}, {:3}, {:3})", 
                 hue, r, g, b);
         }
@@ -113,7 +113,7 @@ fn hsv_to_rgb(h: u16, s: u8, v: u8) -> (u8, u8, u8) {
     
     let c = (v * s) / 100;  // Chroma
     let h_prime = (h % 360) / 60;  // 0-5
-    let x = (c * (60 - ((h % 120) as i16 - 60).abs() as u16)) / 60;
+    let x = (c * (60 - ((h % 120) as i16 - 60).unsigned_abs())) / 60;
     
     let (r1, g1, b1) = match h_prime {
         0 => (c, x, 0),

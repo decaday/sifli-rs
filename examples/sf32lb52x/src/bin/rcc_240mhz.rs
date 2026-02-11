@@ -7,7 +7,6 @@ use embassy_executor::Spawner;
 use embassy_time::Timer;
 use panic_probe as _;
 
-use sifli_hal;
 use sifli_hal::gpio;
 use sifli_hal::rcc::{self, Dll, DllStage, Sysclk};
 

@@ -178,7 +178,7 @@ impl<'d, T: Instance> I2c<'d, T, Blocking> {
         });
 
         // Disable all interrupts (polling mode)
-        regs.ier().write(|w| {}); // IER = 0
+        regs.ier().write(|_| {}); // IER = 0
 
         // Set reset cycle count for bus recovery (default 9 cycles)
         regs.rccr().write(|w| w.set_rstcyc(9));

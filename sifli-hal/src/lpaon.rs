@@ -38,6 +38,7 @@ pub(crate) fn configure_lcpu_start() {
 }
 
 /// Read the currently configured LCPU start vector `(SP, PC)` from LPAON registers.
+#[allow(dead_code)]
 pub(crate) fn read_start_vector() -> (u32, u32) {
     let r = regs();
     let spr = r.spr().read();
