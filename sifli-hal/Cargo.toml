@@ -57,6 +57,12 @@ quote = "1.0.38"
 regex = "1.11"
 syn = "2.0"
 
+[dev-dependencies]
+critical-section = { version = "1.1", features = ["std"] }
+proptest = "1.5.0"
+proptest-state-machine = "0.3.0"
+embassy-time = { version = "0.5.0", features = ["std", "generic-queue-8"] }
+
 [features]
 # default = ["rt"]
 default = ["rt", "time", "defmt", "set-msplim", "usb", "sf32lb52x"]
