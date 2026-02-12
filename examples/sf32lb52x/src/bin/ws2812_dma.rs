@@ -25,12 +25,12 @@ use {defmt_rtt as _, panic_probe as _};
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let p = sifli_hal::init(Default::default());
+    let (p, clk) = sifli_hal::init(Default::default());
     
     // UART debug output
     let mut config = Config::default();
     config.baudrate = 1000000;
-    let mut usart = Uart::new_blocking(p.USART1, p.PA18, p.PA19, config).unwrap();
+    let mut usart = Uart::new_blocking(p.USART1, p.PA18, p.PA19, &clk.clk_peri, config).unwrap();
     
     // Enable RGB LED power supply
     sifli_hal::pac::PMUC.peri_ldo().modify(|w| {
@@ -46,6 +46,7 @@ async fn main(_spawner: Spawner) {
         Some(PwmPin::new(p.PA32)),  // Auto-configures GPIO
         None, None, None,
         p.DMAC1_CH1,                // DMA channel for Update events
+        &clk.clk_peri_div2,
         Hertz::khz(800),
         CountingMode::EdgeAlignedUp,
     );

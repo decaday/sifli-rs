@@ -6,6 +6,8 @@
 //! `CAL_ADDR_REG1/2/3`.
 
 use crate::pac::BT_RFC;
+#[cfg(feature = "edr-cal")]
+use super::edr_lo::{EdrLoCalResult, DPSK_GAIN_INITIAL};
 use super::vco::VcoCalResult;
 use super::txdc::{TxdcCalResult, NUM_POWER_LEVELS};
 
@@ -146,4 +148,59 @@ pub fn store_txdc_cal_tables(
         "CAL_ADDR: REG1=0x{:08X} REG2=0x{:08X} REG3=0x{:08X}",
         r1.0, r2.0, r3.0
     );
+}
+
+/// Overwrite BT TX calibration table with final EDR LO results (idac, capcode,
+/// oslo_fc, oslo_bm, dpsk_gain, tmxcap).
+///
+/// Called after OSLO calibration completes. Overwrites the BT TX region
+/// previously written by `store_vco_cal_tables` (or `edr_lo::store_initial_edr_table`).
+/// The MAC hardware's BT_TXON `RD_FULCAL` command reads from this address
+/// and loads the word into `EDR_CAL_REG1`.
+///
+/// Word format matches `EDR_CAL_REG1` bit layout:
+/// - [7:0]   brf_edr_vco_pdx_lv (capcode)
+/// - [14:8]  brf_edr_vco_idac_lv
+/// - [15]    dpsk_gain bit 1
+/// - [18:16] brf_oslo_fc_lv
+/// - [19]    dpsk_gain bit 2
+/// - [24:20] brf_oslo_bm_lv
+/// - [27:25] dpsk_gain bits 4:2
+/// - [31:28] brf_trf_edr_tmxcap_sel_lv (default 6)
+#[cfg(feature = "edr-cal")]
+pub fn store_edr_lo_cal_tables(edr_lo: &EdrLoCalResult) {
+    let base = super::BT_RFC_MEM_BASE;
+    let bt_tx_addr = BT_RFC.cal_addr_reg2().read().bt_tx_cal_addr() as u32;
+
+    for i in 0..79usize {
+        let mut word: u32 = 0;
+
+        // [7:0] capcode (PDX)
+        word |= edr_lo.capcode[i] as u32;
+        // [14:8] IDAC
+        word |= (edr_lo.idac[i] as u32) << 8;
+        // [18:16] OSLO FC
+        word |= (edr_lo.oslo_fc[i] as u32) << 16;
+        // [24:20] OSLO BM
+        word |= (edr_lo.oslo_bm[i] as u32) << 20;
+        // [31:28] TMXCAP default=6
+        word |= 6u32 << 28;
+
+        // DPSK gain bits scattered across the word:
+        // SDK: d0 = (dpsk_gain[i] >> 1) & 0x1  -> bit 15
+        //      d1 = (dpsk_gain[i] >> 1) & 0x2  -> bit 19
+        //      d2 = (dpsk_gain[i] >> 1) & 0x1c -> bits 27:25
+        let dg = DPSK_GAIN_INITIAL[i] >> 1;
+        let d0 = ((dg as u32) & 0x1) << 15;
+        let d1 = ((dg as u32) & 0x2) << 18;
+        let d2 = ((dg as u32) & 0x1c) << 23;
+        word |= d0 | d1 | d2;
+
+        unsafe {
+            core::ptr::write_volatile(
+                (base + bt_tx_addr + (i as u32) * 4) as *mut u32,
+                word,
+            );
+        }
+    }
 }

@@ -27,7 +27,7 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let p = sifli_hal::init(Default::default());
+    let (p, clk) = sifli_hal::init(Default::default());
 
     let mut config = Config::default();
     config.baudrate = 1000000;
@@ -38,6 +38,7 @@ async fn main(_spawner: Spawner) {
         Irqs,
         p.DMAC1_CH1,
         p.DMAC1_CH2,
+        &clk.clk_peri,
         config,
     )
     .unwrap();

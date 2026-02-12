@@ -3,6 +3,9 @@ use critical_section::CriticalSection;
 mod clock;
 pub use clock::*;
 
+mod token;
+pub use token::*;
+
 // Re-export PAC RCC enums
 pub use crate::pac::hpsys_rcc::vals;
 pub use crate::pac::lpsys_rcc::vals as lpsys_vals;
@@ -29,6 +32,8 @@ pub(crate) trait SealedRccGetFreq {
 
 #[allow(private_bounds)]
 pub trait RccGetFreq: SealedRccGetFreq + 'static {
+    /// The clock token type this peripheral depends on.
+    type Clock;
     /// Get peripheral frequency
     /// Returns `None` if clock is disabled
     fn frequency() -> Option<Hertz> {

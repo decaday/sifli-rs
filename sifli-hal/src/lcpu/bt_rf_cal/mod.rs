@@ -9,6 +9,8 @@
 //!
 //! Based on SDK `bt_rf_cal()` and related functions in `bt_rf_fulcal.c`.
 
+#[cfg(feature = "edr-cal")]
+mod edr_lo;
 mod opt;
 pub mod rfc_cmd;
 pub mod rfc_tables;
@@ -320,13 +322,17 @@ pub fn bt_rf_cal(dma_ch: impl Peripheral<P = impl Channel>) {
     rf_dump_checkpoint("AFTER_VCO_CAL");
 
     // SDK:5078 bt_ful_cal — step b: bt_rfc_edrlo_3g_cal()
-    // TODO: EDR LO 3GHz VCO ACAL/FCAL + OSLO calibration (bt_rf_fulcal.c:3026-3620)
-    //   - Enable VCO3G, OSLO, LODISTEDR; ACAL/FCAL binary search for EDR channels
-    //   - OSLO cal: save 3 GPADC regs → configure GPADC (P_INT_EN/SE/LDOREF_EN,
-    //     CONV_WIDTH=252, SAMP_WIDTH=239) → FC binary search → BM binary search
-    //     → restore 3 GPADC regs
-    //   - Write EDR LO results to RFC SRAM (79ch idac/capcode + kcal)
-    //   Impact: EDR TX frequency accuracy / phase noise; pure BLE works without this.
+    #[cfg(feature = "edr-cal")]
+    let edr_lo_result = edr_lo::edr_lo_cal_full();
+    #[cfg(feature = "edr-cal")]
+    {
+        debug!(
+            "EDR LO cal: ch[0] fc={} bm={}, ch[39] fc={} bm={}",
+            edr_lo_result.oslo_fc[0], edr_lo_result.oslo_bm[0],
+            edr_lo_result.oslo_fc[39], edr_lo_result.oslo_bm[39]
+        );
+        rf_dump_checkpoint("AFTER_EDR_LO_CAL");
+    }
 
     // SDK:5085-5086 bt_ful_cal — step c: LPSYS clock switch before TXDC
     // TODO: hwp_lpsys_rcc->CSR = (CSR & ~SEL_SYS) | (1 << SEL_SYS_Pos)
@@ -347,6 +353,10 @@ pub fn bt_rf_cal(dma_ch: impl Peripheral<P = impl Channel>) {
 
     // Store VCO cal tables first — force_tx needs CAL_ADDR to look up VCO params.
     let txdc_table_addr = rfc_tables::store_vco_cal_tables(cmd_end_addr, &vco_cal);
+
+    // Overwrite BT TX table with EDR LO results (idac, capcode, oslo_fc, oslo_bm, dpsk_gain)
+    #[cfg(feature = "edr-cal")]
+    rfc_tables::store_edr_lo_cal_tables(&edr_lo_result);
 
     let mut txdc_config = txdc::TxdcCalConfig::default();
     txdc_config.power_level_mask = cal_enable;

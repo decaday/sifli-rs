@@ -319,6 +319,7 @@ fn generate_rcc_impls(
     for peripheral in &peripherals.hcpu {
         if let Some(clock) = peripheral.clock.clone() {
             let clock_name_ident = format_ident!("{}", clock);
+            let clock_token_type = clock_to_token_type(&clock);
             let peripheral_name_ident = format_ident!("{}", peripheral.name);
             let impl_tokens = quote! {
                 impl crate::rcc::SealedRccGetFreq for #peripheral_name_ident {
@@ -326,7 +327,9 @@ fn generate_rcc_impls(
                         crate::rcc::clocks().#clock_name_ident.into()
                     }
                 }
-                impl crate::rcc::RccGetFreq for #peripheral_name_ident {}
+                impl crate::rcc::RccGetFreq for #peripheral_name_ident {
+                    type Clock = #clock_token_type;
+                }
             };
 
             implementations.extend(impl_tokens);
@@ -337,6 +340,7 @@ fn generate_rcc_impls(
     for peripheral in &peripherals.lcpu {
         if let Some(clock) = peripheral.clock.clone() {
             let clock_name_ident = format_ident!("{}", clock);
+            let clock_token_type = clock_to_token_type(&clock);
             let peripheral_name_ident = format_ident!("{}", peripheral.name);
             let impl_tokens = quote! {
                 impl crate::rcc::SealedRccGetFreq for #peripheral_name_ident {
@@ -344,7 +348,9 @@ fn generate_rcc_impls(
                         crate::rcc::clocks().#clock_name_ident.into()
                     }
                 }
-                impl crate::rcc::RccGetFreq for #peripheral_name_ident {}
+                impl crate::rcc::RccGetFreq for #peripheral_name_ident {
+                    type Clock = #clock_token_type;
+                }
             };
 
             implementations.extend(impl_tokens);
@@ -352,6 +358,26 @@ fn generate_rcc_impls(
     }
 
     implementations
+}
+
+fn clock_to_token_type(clock: &str) -> TokenStream {
+    match clock {
+        "hclk" => quote! { crate::rcc::Hclk },
+        "pclk" => quote! { crate::rcc::Pclk },
+        "pclk2" => quote! { crate::rcc::Pclk2 },
+        "clk_peri" => quote! { crate::rcc::ClkPeri },
+        "clk_peri_div2" => quote! { crate::rcc::ClkPeriDiv2 },
+        "clk_usb" => quote! { crate::rcc::ClkUsb },
+        "clk_wdt" => quote! { crate::rcc::ClkWdt },
+        "clk_rtc" => quote! { crate::rcc::ClkRtc },
+        "clk_mpi1" => quote! { crate::rcc::ClkMpi1 },
+        "clk_mpi2" => quote! { crate::rcc::ClkMpi2 },
+        "clk_aud_pll" => quote! { crate::rcc::ClkAudPll },
+        "clk_aud_pll_div16" => quote! { crate::rcc::ClkAudPllDiv16 },
+        "lp_hclk" => quote! { crate::rcc::LpHclk },
+        "lp_mac_clk" => quote! { crate::rcc::LpMacClk },
+        _ => panic!("Unknown clock domain: {}", clock),
+    }
 }
 
 fn find_field_in_registers<'a>(

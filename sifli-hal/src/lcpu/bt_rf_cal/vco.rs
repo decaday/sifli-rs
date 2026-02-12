@@ -121,7 +121,7 @@ pub fn rfc_init() {
 
 /// Read FBDV frequency counter value.
 /// Resets counter, enables it, waits for ready, returns result.
-fn get_fbdv_cnt() -> u32 {
+pub(super) fn get_fbdv_cnt() -> u32 {
     crate::cortex_m_blocking_delay_us(4);
     BT_RFC.fbdv_reg1().modify(|w| {
         w.set_brf_fkcal_cnt_en_lv(false);
@@ -240,7 +240,7 @@ fn acal_sequential(mut acal_cnt: u8) -> u8 {
 }
 
 /// Search sweep results for closest match to target reference frequency.
-fn search_closest(
+pub(super) fn search_closest(
     ref_tbl: &[u16],
     sweep_residual: &[u16],
     sweep_idac: &[u8],

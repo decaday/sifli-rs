@@ -570,6 +570,34 @@ impl ConfigBuilder {
         }
     }
 
+    /// Create a builder for runtime sysclk reconfiguration.
+    ///
+    /// Defaults to HXT48, no DLL, no USB, no DLL2 — safe for runtime switching
+    /// where only the sysclk/hclk/pclk tree matters.
+    pub const fn sysclk() -> Self {
+        Self {
+            sys: Sysclk::Hxt48,
+            hdiv: HclkPrescaler(1),
+            pdiv1: PclkPrescaler::Div1,
+            pdiv2: PclkPrescaler::Div1,
+            dll1: None,
+            dll2: None,
+            hrc48_calibrate: false,
+            usb: false,
+            mux: ClockMux {
+                // MPI defaults to Peri (no DLL dependency) for safe validation
+                mpi1sel: Mpisel::Peri,
+                mpi2sel: Mpisel::Peri,
+                rtcsel: Rtcsel::Lrc10,
+                wdtsel: Wdtsel::Lrc32,
+                usbsel: Usbsel::Sysclk,
+                perisel: Perisel::Hxt48,
+                ticksel: Ticksel::ClkRtc,
+                lpsel: Lpsel::SelSys,
+            },
+        }
+    }
+
     pub const fn with_sys(mut self, sys: Sysclk) -> Self {
         self.sys = sys;
         self
@@ -796,6 +824,122 @@ impl ConfigBuilder {
 /// Can only be constructed via [`ConfigBuilder::checked()`], which validates at
 /// compile time when used inside a `const { }` block.
 pub struct Config(pub(crate) ConfigBuilder);
+
+/// Reconfigure sysclk at runtime.
+///
+/// Requires exclusive access to `hclk`, `pclk`, and `pclk2` tokens,
+/// which guarantees no peripheral currently borrows these clocks.
+///
+/// When the `time-driver-gptim1` feature is enabled this function is unavailable
+/// because GPTIM1 uses `pclk` and switching sysclk would break timekeeping.
+///
+/// Use [`ConfigBuilder::sysclk()`] to create a configuration suitable for runtime switching.
+///
+/// # Peripherals that borrow clock tokens
+///
+/// Drivers that take `&'d Pclk` or `&'d Hclk` at construction hold the borrow for
+/// their entire lifetime, preventing this function from obtaining `&mut` access.
+/// This is intentional — especially for **async** drivers where an operation may be
+/// `.await`-ing (e.g. [`Adc::read()`]) in one task while another task attempts to
+/// switch clocks. The lifetime bound catches this conflict at compile time.
+///
+/// Which clock a peripheral borrows is determined by the `clock` field in
+/// `data/sf32lb52x/peripherals.yaml`, which maps to the associated type
+/// `<T as RccGetFreq>::Clock`. Currently:
+///
+/// - **`Pclk`**: GPADC, TSEN, GPTIM1, BTIM1, ATIM1, EFUSEC, TRNG, MAILBOX1
+/// - **`Hclk`**: EXTDMA, EZIP1, EPIC, LCDC1, AES, SDMMC1, CRC1, PTC1, DMAC1, GPIO
+///
+/// Note: USART, SPI, I2C use `ClkPeri` (fixed 48 MHz), so they do **not** conflict.
+///
+/// # Usage with conflicting peripherals
+///
+/// Drop the driver before switching, then recreate it. Pass `&mut` borrows
+/// (instead of moving the singleton) so the peripheral can be reused:
+///
+/// ```rust,ignore
+/// // Use &mut so the singleton is not consumed
+/// let mut adc = Adc::new_blocking(&mut p.GPADC, &clk.pclk, Default::default());
+/// let sample = adc.blocking_read(&mut ch).unwrap();
+/// drop(adc); // releases &Pclk and &mut GPADC
+///
+/// reconfigure_sysclk(&mut clk.hclk, &mut clk.pclk, &mut clk.pclk2, new_cfg);
+///
+/// // Recreate — adjust Config if the new PCLK frequency requires different timing
+/// let mut adc = Adc::new_blocking(&mut p.GPADC, &clk.pclk, Default::default());
+/// ```
+#[cfg(not(feature = "time-driver-gptim1"))]
+pub fn reconfigure_sysclk(
+    _hclk: &mut super::Hclk,
+    _pclk: &mut super::Pclk,
+    _pclk2: &mut super::Pclk2,
+    config: Config,
+) {
+    let config = &config.0;
+    let current_hclk = get_hclk_freq().unwrap_or(Hertz(48_000_000));
+    let target_hclk = config.get_hclk_freq();
+
+    crate::pmu::dvfs::config_hcpu_dvfs(current_hclk, target_hclk, || {
+        // Safe Clock Switching: temporarily switch to HXT48/HRC48
+        if HPSYS_RCC.csr().read().sel_sys() == Sysclk::Dll1 {
+            if HPSYS_AON.acr().read().hxt48_rdy() {
+                HPSYS_RCC.csr().modify(|w| w.set_sel_sys(Sysclk::Hxt48));
+            } else {
+                HPSYS_RCC.csr().modify(|w| w.set_sel_sys(Sysclk::Hrc48));
+            }
+        }
+
+        // Reconfigure DLL1 if needed
+        if let Some(dll1) = config.dll1 {
+            if !HPSYS_CFG.cau2_cr().read().hpbg_en() {
+                HPSYS_CFG.cau2_cr().modify(|w| w.set_hpbg_en(true));
+            }
+            if !HPSYS_CFG.cau2_cr().read().hpbg_vddpsw_en() {
+                HPSYS_CFG.cau2_cr().modify(|w| w.set_hpbg_vddpsw_en(true));
+            }
+
+            HPSYS_RCC.dllcr(0).modify(|w| w.set_en(false));
+            compiler_fence(Ordering::SeqCst);
+
+            HPSYS_RCC.dllcr(0).modify(|w| {
+                w.set_in_div2_en(true);
+                w.set_out_div2_en(dll1.out_div2);
+                w.set_stg(dll1.stg);
+                w.set_en(true);
+            });
+
+            crate::cortex_m_blocking_delay_us(10);
+            while !HPSYS_RCC.dllcr(0).read().ready() {}
+        }
+
+        // Set dividers
+        HPSYS_RCC.cfgr().modify(|w| {
+            w.set_hdiv(config.hdiv.0);
+            w.set_pdiv1(config.pdiv1);
+            w.set_pdiv2(config.pdiv2);
+        });
+
+        // Switch sysclk source
+        match config.sys {
+            Sysclk::Hrc48 => HPSYS_RCC.csr().modify(|w| w.set_sel_sys(Sysclk::Hrc48)),
+            Sysclk::Hxt48 => HPSYS_RCC.csr().modify(|w| w.set_sel_sys(Sysclk::Hxt48)),
+            Sysclk::Dll1 => HPSYS_RCC.csr().modify(|w| w.set_sel_sys(Sysclk::Dll1)),
+            _ => unimplemented!(),
+        }
+    });
+
+    // Update global frequency state
+    unsafe {
+        let c = get_freqs().clone();
+        set_freqs(Clocks {
+            sysclk: config.get_sysclk_freq().into(),
+            hclk: config.get_hclk_freq().into(),
+            pclk: (config.get_hclk_freq() / config.pdiv1).into(),
+            pclk2: (config.get_hclk_freq() / config.pdiv2).into(),
+            ..c
+        });
+    }
+}
 
 /// Clocks configuration
 #[derive(Debug, Clone, Copy)]

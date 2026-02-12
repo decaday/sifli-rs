@@ -109,10 +109,12 @@ mod mpu;
 
 /// Initialize the `sifli-hal` with the provided configuration.
 ///
-/// This returns the peripheral singletons that can be used for creating drivers.
+/// Returns peripheral singletons and clock control tokens.
+/// The clock tokens can be borrowed by peripheral constructors (`&'d Token`)
+/// and exclusively borrowed by reconfiguration functions (`&mut Token`).
 ///
 /// This should only be called once at startup, otherwise it panics.
-pub fn init(config: Config) -> Peripherals {
+pub fn init(config: Config) -> (Peripherals, rcc::ClockControl) {
     system_init();
 
     // Do this first, so that it panics if user is calling `init` a second time
@@ -124,14 +126,14 @@ pub fn init(config: Config) -> Peripherals {
 
         #[cfg(feature = "_time-driver")]
         time_driver::init();
-        
+
         gpio::init(config.gpio1_it_priority);
         critical_section::with(|cs| {
             dma::init(cs);
         });
-        
+
     }
-    p
+    (p, rcc::ClockControl::new())
 }
 
 fn system_init() {

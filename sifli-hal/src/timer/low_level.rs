@@ -38,7 +38,7 @@ pub struct Timer<'d, T: Instance> {
 
 impl<'d, T: GptimInstance> Timer<'d, T> {
     /// Create a new Timer instance
-    pub fn new(tim: impl Peripheral<P = T> + 'd) -> Self {
+    pub fn new(tim: impl Peripheral<P = T> + 'd, _clk: &'d <T as crate::rcc::RccGetFreq>::Clock) -> Self {
         into_ref!(tim);
 
         // Enable and reset the timer clock

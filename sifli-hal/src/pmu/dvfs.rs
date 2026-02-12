@@ -70,7 +70,8 @@ impl defmt::Format for HpsysDvfsMode {
 }
 
 pub fn is_hpsys_dvfs_mode_s() -> bool {
-    HPSYS_CFG.syscr().read().ldo_vsel()
+    // HPSYS: LDO_VSEL=0 means S-mode, LDO_VSEL=1 means D-mode
+    !HPSYS_CFG.syscr().read().ldo_vsel()
 }
 
 impl HpsysDvfsMode {
@@ -169,15 +170,18 @@ fn switch_hcpu_dvfs_d2s<F>(
     config_clock: F,
 ) where
     F: FnOnce(),
-{ 
+{
     config_hcpu_sx_mode_volt(target_dvfs_mode);
-    // Switch to S mode
+    // Switch to S mode (HPSYS: ldo_vsel=0 selects S-mode voltage rails)
     HPSYS_CFG.syscr().modify(|w| {
         w.set_ldo_vsel(false);
     });
 
     // buck need 250us to settle
     crate::cortex_m_blocking_delay_us(250);
+
+    // Set memory timing parameters for S-mode before switching to high frequency
+    HPSYS_CFG.ulpmcr().write_value(target_dvfs_mode.get_config().ulpmcr);
 
     config_clock();
 }
@@ -195,18 +199,20 @@ fn switch_hcpu_dvfs_s2d<F>(
         w.set_set_vout_m(dvfs_config.buck);
     });
 
-    // configure LDO voltage
-    // TODO: use efuse value (HAL_PMU_GetHpsysVoutRef[2])
-    let vout_ref = dvfs_config.ldo;
+    // configure LDO voltage for D mode
+    // SDK uses: HAL_PMU_GetHpsysVoutRef() + ldo_offset
+    // eFuse default reference is ~0xB (1.1V). TODO: read actual eFuse value.
+    let efuse_ref: i8 = 0xB;
+    let vref = (efuse_ref + dvfs_config.ldo_offset) as u8;
     PMUC.hpsys_ldo().modify(|w| {
-        w.set_vref(vout_ref + dvfs_config.ldo_offset as u8);
+        w.set_vref(vref);
     });
 
     config_clock();
 
     // configure memory param
     HPSYS_CFG.ulpmcr().write_value(dvfs_config.ulpmcr);
-    // Switch to D mode
+    // Switch to D mode (HPSYS: ldo_vsel=1 selects D-mode voltage rails)
     HPSYS_CFG.syscr().modify(|w| {
         w.set_ldo_vsel(true);
     });
@@ -351,9 +357,9 @@ where
 {
     config_lpsys_s_mode_volt(target_dvfs_mode);
 
-    // Switch to S mode (higher voltage)
+    // Switch to S mode (ldo_vsel=1 selects S-mode voltage rails)
     LPSYS_CFG.syscr().modify(|w| {
-        w.set_ldo_vsel(false);
+        w.set_ldo_vsel(true);
     });
 
     // Wait for voltage to settle (250us)
@@ -379,8 +385,8 @@ where
     // Configure memory parameters
     LPSYS_CFG.ulpmcr().write_value(dvfs_config.ulpmcr);
 
-    // Switch to D mode (lower voltage)
+    // Switch to D mode (ldo_vsel=0 selects D-mode voltage rails)
     LPSYS_CFG.syscr().modify(|w| {
-        w.set_ldo_vsel(true);
+        w.set_ldo_vsel(false);
     });
 }

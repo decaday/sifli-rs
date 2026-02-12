@@ -216,6 +216,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
         tx: impl Peripheral<P = impl TxdPin<T>> + 'd,
         tx_buffer: &'d mut [u8],
         rx_buffer: &'d mut [u8],
+        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -226,6 +227,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
             None,
             tx_buffer,
             rx_buffer,
+            clk,
             config,
         )
     }
@@ -240,6 +242,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
         cts: impl Peripheral<P = impl CtsPin<T>> + 'd,
         tx_buffer: &'d mut [u8],
         rx_buffer: &'d mut [u8],
+        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -251,6 +254,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
             new_pin!(cts, AfType::new(Pull::None)),
             tx_buffer,
             rx_buffer,
+            clk,
             config,
         )
     }
@@ -264,6 +268,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
         rts: impl Peripheral<P = impl RtsPin<T>> + 'd,
         tx_buffer: &'d mut [u8],
         rx_buffer: &'d mut [u8],
+        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -274,6 +279,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
             None, // no CTS
             tx_buffer,
             rx_buffer,
+            clk,
             config,
         )
     }
@@ -296,6 +302,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         tx_buffer: &'d mut [u8],
         rx_buffer: &'d mut [u8],
+        clk: &'d <T as rcc::RccGetFreq>::Clock,
         mut config: Config,
         readback: HalfDuplexReadback,
         half_duplex: HalfDuplexConfig,
@@ -310,6 +317,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
             None,
             tx_buffer,
             rx_buffer,
+            clk,
             config,
         )
     }
@@ -330,6 +338,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         tx_buffer: &'d mut [u8],
         rx_buffer: &'d mut [u8],
+        clk: &'d <T as rcc::RccGetFreq>::Clock,
         mut config: Config,
         readback: HalfDuplexReadback,
         half_duplex: HalfDuplexConfig,
@@ -344,6 +353,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
             None,
             tx_buffer,
             rx_buffer,
+            clk,
             config,
         )
     }
@@ -356,6 +366,7 @@ impl<'d, T: Instance> BufferedUart<'d, T> {
         cts: Option<PeripheralRef<'d, AnyPin>>,
         tx_buffer: &'d mut [u8],
         rx_buffer: &'d mut [u8],
+        _clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         let state = T::buffered_state();
