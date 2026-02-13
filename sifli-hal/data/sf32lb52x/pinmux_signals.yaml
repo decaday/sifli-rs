@@ -1,31 +1,40 @@
-# pinmux_signal: signal in pinmux. e.g. PA00_I2C_UART, LCDC1_8080_DIO6
+# Pinmux Signal Mapping Configuration
+# Maps hardware signals (from pinmux.yaml) to Rust traits and types.
 
-# Avaliable inserts:
-# peripheral_nomux:
-#   $peripheral = signal.split("_")[0]
-#     e.g. LCDC1_SPI_RSTB -> LCDC1
-# peripheral_mux:
-#   $peripheral = signal
-#   $cfg_pin = HPSYS.XXXx_PINRx.(.*)
-#     e.g. USART2_PINR.TXD_PIN -> TxdPin
+# --- Variable Substitution Rules ---
+#
+# 1. Type: `peripheral_nomux` (Default)
+#    - $peripheral: The first segment of the signal name.
+#      Example: `LCDC1_SPI_RSTB` -> `LCDC1`
+#    - $laststr:    The last segment of the signal name, converted to PascalCase.
+#      Example: `LCDC1_SPI_RSTB` -> `Rstb`
+#      Example: `LCDC1_SPI_TS`   -> `Ts`
+#
+# 2. Type: `peripheral_mux`
+#    - $peripheral: The explicit signal name defined in `pinmux_signals`.
+#      Example: `USART`
+#    - $cfg_pin:    Derived from the HPSYS_CFG register field name.
+#      Example: `USART2_PINR.TXD_PIN` -> `TxdPin`
+
 hcpu:
+  # Standard GPIO pins
   - name: GPIO_A.*
-    # type: default is `peripheral_nomux`
     type: gpio
 
+  # Superimposed Signals
+  # Maps one physical pin definition (PAxx_I2C_UART) to multiple logical controllers.
   - name: PA.*_I2C_UART
     type: superimposed
-    # signal also is the HPSYS_CFG fieldsets name
-    # e.g. USART -> USARTx_PINRx
     signals:
       - USART
       - I2C
+
   - name: PA.*_TIM
     type: superimposed
     signals:
-      - GPTIM  # Only GPTIM for now, ATIM has complex multi-register PINR
-      # - ATIM  # TODO: ATIM uses PINR1/2/3, need special handling
-      # - LPTIM  # TODO: Add LPTIM support later
+      - ATIM
+      - GPTIM
+      - LPTIM
 
   # GPTIM pin signals (auto-generated)
   - name: GPTIM
@@ -33,11 +42,18 @@ hcpu:
     pin_trait:
       crate::timer::TimerPin<$peripheral, crate::timer::$cfg_pin>
 
+  # Muxed Peripheral: USART
+  # Uses register lookup to determine the specific pin trait (e.g., TxdPin, RxdPin).
   - name: USART
     type: peripheral_mux
     pin_trait:
       crate::usart::$cfg_pin<$peripheral>
 
-  - name: LCDC1_SPI_RSTB
+  # No-Mux Peripheral: LCDC SPI
+  # Uses Regex to match multiple signals (RSTB, TS, etc.) with a single rule.
+  # dynamic substitution:
+  #   Input:  LCDC1_SPI_RSTB
+  #   Output: crate::lcdc::SpiRstbPin<LCDC1>
+  - name: LCDC.*_SPI_.*
     pin_trait:
-      crate::lcdc::SpiRstbPin<$peripheral>
+      crate::lcdc::Spi$laststrPin<$peripheral>

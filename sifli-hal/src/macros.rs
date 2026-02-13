@@ -9,6 +9,14 @@ macro_rules! new_pin {
     }};
 }
 
+macro_rules! init_pin {
+    ($name:ident, $af_type:expr) => {{
+        let pin = $name.into_ref();
+        pin.set_function(pin.fsel(), $af_type);
+        pin.set_cfg_pin();
+    }};
+}
+
 macro_rules! pin_trait {
     ($signal:ident, $instance:path $(, $mode:path)?) => {
         #[doc = concat!(stringify!($signal), " pin trait")]

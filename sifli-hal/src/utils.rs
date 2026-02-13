@@ -1,6 +1,7 @@
 #![allow(unused)]
 
 use portable_atomic::{AtomicU8, AtomicU32, AtomicU64, Ordering};
+use embassy_time::{Duration, Instant};
 
 /// A thread-safe bit flag structure based on AtomicU8.
 pub(crate)struct BitFlags8 {
@@ -173,4 +174,33 @@ impl Iterator for BitIter64 {
             }
         }
     }
+}
+
+
+/// Blocks until a condition becomes false or a timeout is reached.
+#[inline]
+pub fn blocking_wait_timeout<F>(mut condition: F, timeout: Duration) -> Result<(), ()>
+where
+    F: FnMut() -> bool,
+{
+    let start = Instant::now();
+    
+    while condition() {
+        if start.elapsed() > timeout {
+            return Err(());
+        }
+        // core::hint::spin_loop(); 
+    }
+    
+    Ok(())
+}
+
+
+/// Blocks until a condition becomes false or a timeout in milliseconds is reached.
+#[inline]
+pub fn blocking_wait_timeout_ms<F>(mut condition: F, timeout_ms: u64) -> Result<(), ()>
+where
+    F: FnMut() -> bool,
+{
+    blocking_wait_timeout(&mut condition, Duration::from_millis(timeout_ms))
 }

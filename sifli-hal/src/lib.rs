@@ -1,4 +1,4 @@
-#![no_std]
+#![cfg_attr(not(test), no_std)]
 #![doc = include_str!("../README.md")]
 
 // This mod MUST go first, so that the others see its macros.
@@ -19,6 +19,7 @@ pub mod time;
 pub mod pmu;
 pub mod patch;
 pub mod syscfg;
+pub mod efuse;
 #[allow(clippy::all)] // modified from embassy-stm32
 pub mod usart;
 pub mod adc;
@@ -183,6 +184,24 @@ pub fn blocking_delay_us(us: u32) {
     embassy_time::block_for(embassy_time::Duration::from_micros(us as u64));
     #[cfg(not(feature = "time"))]
     cortex_m_blocking_delay_us(us);
+}
+
+/// Converts a address to a System Bus address.
+/// `HCPU_MPI_SBUS_ADDR``
+pub fn to_system_bus_addr(addr: usize) -> usize {
+    match addr {
+        0x1000_0000..0x2000_0000 => addr + 0x5000_0000,
+        _ => addr,
+    }
+}
+
+/// Converts a address to a Code Bus address.
+/// `HCPU_MPI_CBUS_ADDR``
+pub fn to_code_bus_addr(addr: usize) -> usize {
+    match addr {
+        0x6000_0000..0x7000_0000 => addr - 0x5000_0000,
+        _ => addr,
+    }
 }
 
 /// Macro to bind interrupts to handlers.

@@ -188,6 +188,22 @@ Rust Hardware Abstraction Layer (HAL) and [Embassy](https://github.com/embassy-r
             <td>Calibration</td><td></td><td></td><td></td>
         </tr>
         <tr>
+            <td rowspan="4"><strong>LCDC</strong></td>
+            <td>Command Path / Data Path ➕</td>
+            <td>✅</td><td></td><td></td>
+        </tr>
+        <tr>
+            <td>SPI QSPI Interface</td>
+            <td>✅</td><td></td><td></td>
+        </tr>
+        <tr>
+            <td>8080, RGB, JDI, MIPIDSI Interface</td><td></td><td></td><td></td>
+        </tr>
+        <tr>
+            <td>Blender, Fill, Canvas</td>
+            <td></td><td></td><td></td>
+        </tr>
+        <tr>
             <td rowspan="4"><strong>PMU</strong></td>
             <td>DVFS Upscale</td>
             <td>✅</td><td></td><td></td>
@@ -231,14 +247,17 @@ Rust Hardware Abstraction Layer (HAL) and [Embassy](https://github.com/embassy-r
             <td colspan="2"><strong>BLE</strong></td><td></td><td></td><td></td>
         </tr>
         <tr>
-            <td colspan="2"><strong>LCDC/Layer, SPI, DBI</strong></td><td></td><td></td><td></td>
-        </tr>
-        <tr>
             <td colspan="2"><strong>ePicasso</strong></td><td></td><td></td><td></td>
         </tr>
     </tbody>
 </table>
 </details>
+
+## Examples
+
+Examples can be found [here](../examples).
+
+A simple SF32LB52x+slint+lcdc qspi+co5300 AMOLED example can be found [here](https://github.com/decaday/sf32-slint-example).
 
 ## Features
 
@@ -250,7 +269,7 @@ Rust Hardware Abstraction Layer (HAL) and [Embassy](https://github.com/embassy-r
 
   This feature will be removed after [cortex-m-rt #580](https://github.com/rust-embedded/cortex-m/pull/580)  is released.
 
-- `time-driver-xxx`: Timer configuration for `time-driver`. It requires at least two capture/compare channels. For the `sf32lb52x hcpu`, only `atim1` (TODO: [#5](https://github.com/OpenSiFli/sifli-rs/issues/5)), `gptim1`, and `gptim2` are available.
+- `time-driver-xxx`: Timer configuration for `time-driver`. It requires at least two capture/compare channels. For the `sf32lb52x hcpu`, only `gptim1` and `gptim2` are available. `atim1` has an issue: [#5](https://github.com/OpenSiFli/sifli-rs/issues/5).
 
 - `unchecked-overclocking`: Enable this feature to disable the overclocking check. DO NOT ENABLE THIS FEATURE UNLESS YOU KNOW WHAT YOU'RE DOING.
 

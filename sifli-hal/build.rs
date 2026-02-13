@@ -668,8 +668,24 @@ fn generate_signal_peripheral_nomux_impls(
 ) {
     if let Some(pin_trait) = &signal_def.pin_trait {
         // Extract peripheral from signal name
-        let peripheral = signal_def.name.split("_").next().unwrap();
-        let trait_path_str = pin_trait.replace("$peripheral", peripheral);
+        let peripheral = func.function.split("_").next().unwrap();
+
+        // Get signal suffix (LCDC1_SPI_RSTB -> RSTB) (laststr)
+        // and convert to PascalCase (RSTB -> Rstb)
+        let raw_signal_suffix = func.function.split('_').last().unwrap_or("").to_lowercase();
+        let laststr_pascal = if !raw_signal_suffix.is_empty() {
+            let mut chars = raw_signal_suffix.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        } else {
+            String::new()
+        };
+
+        let trait_path_str = pin_trait
+            .replace("$peripheral", peripheral)
+            .replace("$laststr", &laststr_pascal);
 
         let trait_path = syn::parse_str::<syn::Path>(&trait_path_str)
             .unwrap_or_else(|_| panic!("Invalid trait path: {}", trait_path_str));

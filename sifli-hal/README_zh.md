@@ -187,6 +187,22 @@ SiFli MCU的Rust硬件抽象层(HAL)和[Embassy](https://github.com/embassy-rs/e
             <td>Calibration</td><td></td><td></td><td></td>
         </tr>
         <tr>
+            <td rowspan="4"><strong>LCDC</strong></td>
+            <td>Command Path / Data Path ➕</td>
+            <td>✅</td><td></td><td></td>
+        </tr>
+        <tr>
+            <td>SPI QSPI Interface</td>
+            <td>✅</td><td></td><td></td>
+        </tr>
+        <tr>
+            <td>8080, RGB, JDI, MIPIDSI Interface</td><td></td><td></td><td></td>
+        </tr>
+        <tr>
+            <td>Blender, Fill, Canvas</td>
+            <td></td><td></td><td></td>
+        </tr>
+        <tr>
             <td rowspan="4"><strong>PMU</strong></td>
             <td>DVFS Upscale</td>
             <td>✅</td><td></td><td></td>
@@ -230,14 +246,18 @@ SiFli MCU的Rust硬件抽象层(HAL)和[Embassy](https://github.com/embassy-rs/e
             <td colspan="2"><strong>BLE</strong></td><td></td><td></td><td></td>
         </tr>
         <tr>
-            <td colspan="2"><strong>LCDC/Layer, SPI, DBI</strong></td><td></td><td></td><td></td>
-        </tr>
-        <tr>
             <td colspan="2"><strong>ePicasso</strong></td><td></td><td></td><td></td>
         </tr>
     </tbody>
 </table>
 </details>
+
+
+## 例程
+
+例程在[这里](../examples)。
+
+一个简单的SF32LB52x+slint+lcdc qspi+co5300 AMOLED示例在[这里](https://github.com/decaday/sf32-slint-example)。
 
 ## Features
 
@@ -249,7 +269,7 @@ SiFli MCU的Rust硬件抽象层(HAL)和[Embassy](https://github.com/embassy-rs/e
 
   该feature将在[cortex-m-rt #580](https://github.com/rust-embedded/cortex-m/pull/580)发布后移除。
 
-- `time-driver-xxx`: 为`time-driver`配置定时器。它至少需要两个捕获/比较通道。对于`sf32lb52x hcpu`，只有`atim1`（TODO：[#5](https://github.com/OpenSiFli/sifli-rs/issues/5)）、`gptim1`和`gptim2`可用。
+- `time-driver-xxx`: 为`time-driver`配置定时器。它至少需要两个捕获/比较通道。对于`sf32lb52x hcpu`，只有`gptim1`和`gptim2`可用。`atim1`存在问题：[#5](https://github.com/OpenSiFli/sifli-rs/issues/5)。
 
 - `unchecked-overclocking`: 启用此feature以禁用超频检查。除非你知道自己在做什么，否则不要启用此feature!
 

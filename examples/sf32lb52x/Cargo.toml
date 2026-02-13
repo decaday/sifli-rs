@@ -41,8 +41,6 @@ embedded-hal-async = { version = "1.0" }
 defmt = "1"
 defmt-rtt = "1"
 heapless = "0.9"
-embassy-usb = { version = "0.5", features = ["defmt"] }
-usbd-hid = { version = "0.9", features = ["defmt"] }
 static_cell = "2.1.1"
 portable-atomic = "1.11.1"
 bt-hci = { version = "0.8", features = ["defmt"] }
@@ -53,6 +51,15 @@ trouble-host = { version = "0.6.0", features = [
   "derive",
   "security",
 ] }
+
+# USB dependencies
+embassy-usb = { version = "0.5", features = ["defmt"] }
+usbd-hid = { version = "0.9", features = ["defmt"] }
+
+# Display dependencies
+embedded-graphics = { version = "0.8", features = ["defmt"] }
+display-driver = { version = "0.1.0" }
+display-driver-co5300 = { version = "0.1.1"}
 
 # Patch embassy crates to use embedded-io 0.7 compatible versions
 [patch.crates-io]

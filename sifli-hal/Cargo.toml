@@ -56,6 +56,8 @@ embedded-io-async = { version = "0.7" }
 embedded-storage = { version = "0.3" }
 embedded-storage-async = { version = "0.4.1" }
 portable-atomic = { version = "1.11.1", features = ["require-cas"] }
+display-driver = { version = "0.1.0" }
+bitfield-struct = "0.12.1"
 
 bt-hci = { version = "0.8", optional = true }
 rand_core = { version = "0.6" }
@@ -67,6 +69,14 @@ proc-macro2 = "1.0.93"
 quote = "1.0.38"
 regex = "1.11"
 syn = "2.0"
+
+[dev-dependencies]
+critical-section = { version = "1.1", features = ["std"] }
+proptest = "1.5.0"
+proptest-state-machine = "0.3.0"
+embassy-time = { version = "0.5.0", features = ["std", "generic-queue-8"] }
+
+# cargo test --no-default-features --features="sf32lb52x time"
 
 [features]
 # default = ["rt"]
