@@ -41,8 +41,8 @@ async fn main(_spawner: Spawner) {
     info!("Clock configuration complete");
     rcc::test_print_clocks();
 
-    // SF32LB52-DevKit-LCD LED pin
-    let mut led = gpio::Output::new(p.PA1, gpio::Level::Low);
+    // LED pin: PA26 for SF32LB52-DevKit-LCD, PA31/PA32 for SF32LB52-Nano
+    let mut led = gpio::Output::new(p.PA26, gpio::Level::Low);
 
     loop {
         info!("led on!");

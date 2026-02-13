@@ -3,7 +3,6 @@
 //! Primary goal: make cross-core shared SRAM (HPSYS/LPSYS) non-cacheable,
 //! matching SiFli SDK `mpu_config()` behavior to prevent IPC ring buffer inconsistency from DCache.
 
-use core::ptr;
 use cortex_m::asm;
 
 /// SiFli SDK `mpu_armv8.h`: `ARM_MPU_ATTR_NON_CACHEABLE=4`, `ARM_MPU_ATTR(O,I)=(O<<4)|I` (when O!=0).
@@ -16,11 +15,6 @@ const MPU_CTRL_PRIVDEFENA: u32 = 1 << 2;
 
 const MPU_RBAR_SH_NON: u32 = 0;
 const MPU_RBAR_AP_RW_ANY: u32 = 0b01; // ARM_MPU_AP_(RO=0, NP=1)
-
-// ARMv8-M MPU registers not available in cortex-m 0.7 RegisterBlock.
-// MPU base = 0xE000_ED90.
-const MPU_RLAR: *mut u32 = 0xE000_EDA0 as *mut u32;
-const MPU_MAIR0: *mut u32 = 0xE000_EDC0 as *mut u32;
 
 #[inline]
 const fn mpu_rbar(base: u32, sh: u32, ap: u32, xn: bool) -> u32 {
@@ -51,18 +45,18 @@ pub(crate) unsafe fn init() {
     asm::dsb();
     asm::isb();
 
-    // Attr0: non-cacheable normal memory。
-    ptr::write_volatile(MPU_MAIR0, ATTR_NON_CACHEABLE_NORMAL);
+    // Attr0: non-cacheable normal memory.
+    mpu.mair[0].write(ATTR_NON_CACHEABLE_NORMAL);
 
-    // Region 0: HPSYS SRAM non-cacheable。
+    // Region 0: HPSYS SRAM non-cacheable.
     mpu.rnr.write(0);
     mpu.rbar.write(mpu_rbar(0x2000_0000, MPU_RBAR_SH_NON, MPU_RBAR_AP_RW_ANY, false));
-    ptr::write_volatile(MPU_RLAR, mpu_rlar(0x2027_FFFF, 0));
+    mpu.rlar.write(mpu_rlar(0x2027_FFFF, 0));
 
-    // Region 1: LPSYS SRAM non-cacheable。
+    // Region 1: LPSYS SRAM non-cacheable.
     mpu.rnr.write(1);
     mpu.rbar.write(mpu_rbar(0x203F_C000, MPU_RBAR_SH_NON, MPU_RBAR_AP_RW_ANY, false));
-    ptr::write_volatile(MPU_RLAR, mpu_rlar(0x204F_FFFF, 0));
+    mpu.rlar.write(mpu_rlar(0x204F_FFFF, 0));
 
     // Enable MPU: preserve default memory map (PRIVDEFENA) to prevent faults on uncovered regions.
     mpu.ctrl
@@ -73,13 +67,13 @@ pub(crate) unsafe fn init() {
 
     // Log for confirming MPU is configured and active.
     let ctrl = mpu.ctrl.read();
-    let mair0 = ptr::read_volatile(MPU_MAIR0);
+    let mair0 = mpu.mair[0].read();
     mpu.rnr.write(0);
     let r0_rbar = mpu.rbar.read();
-    let r0_rlar = ptr::read_volatile(MPU_RLAR);
+    let r0_rlar = mpu.rlar.read();
     mpu.rnr.write(1);
     let r1_rbar = mpu.rbar.read();
-    let r1_rlar = ptr::read_volatile(MPU_RLAR);
+    let r1_rlar = mpu.rlar.read();
     debug!(
         "mpu: ctrl=0x{:08X} mair0=0x{:08X} r0=(rbar=0x{:08X} rlar=0x{:08X}) r1=(rbar=0x{:08X} rlar=0x{:08X})",
         ctrl,

@@ -156,7 +156,7 @@ impl AnyChannel {
 
     unsafe fn configure(
         &self,
-        request: u8,
+        request: Request,
         dir: Dir,
         peri_addr: *const u32,
         mem_addr: *mut u32,
@@ -209,7 +209,7 @@ impl AnyChannel {
         r.cm0ar(channel_num).write_value(pac::dmac::regs::Cm0ar(Self::remap_addr(mem_addr as u32)));
         r.cndtr(channel_num).write_value(pac::dmac::regs::Cndtr(ndtr as _));
         r.cselr(channel_num / 4)
-            .modify(|w| w.set_cs(channel_num % 4, request));
+            .modify(|w| w.set_cs(channel_num % 4, request as u8));
         r.ccr(channel_num).write(|w| {
             w.set_dir(dir.into());
             w.set_msize(mem_size.into());
@@ -588,8 +588,9 @@ impl<'a> Transfer<'a> {
         assert!(count > 0 && count <= 0xFFFF);
 
         let channel: PeripheralRef<'a, AnyChannel> = channel.map_into();
+        // M2M mode ignores the request field; use Mpi1 as a dummy value.
         channel.configure(
-            0,
+            Request::Mpi1,
             Dir::PeripheralToMemory,
             src as *const u32,
             dst as *mut u32,
@@ -619,7 +620,7 @@ impl<'a> Transfer<'a> {
         assert!(mem_len > 0 && mem_len <= 0xFFFF);
 
         channel.configure(
-            request as u8, dir, peri_addr, mem_addr, mem_len, incr, false, mem_size, peri_size, options,
+            request, dir, peri_addr, mem_addr, mem_len, incr, false, mem_size, peri_size, options,
         );
         channel.start();
         Self { channel }
@@ -822,7 +823,7 @@ impl<'a, W: Word> ReadableRingBuffer<'a, W> {
         options.circular = true;
 
         channel.configure(
-            request as u8,
+            request,
             dir,
             peri_addr as *mut u32,
             buffer_ptr as *mut u32,
@@ -995,7 +996,7 @@ impl<'a, W: Word> WritableRingBuffer<'a, W> {
         options.circular = true;
 
         channel.configure(
-            request as u8,
+            request,
             dir,
             peri_addr as *mut u32,
             buffer_ptr as *mut u32,
