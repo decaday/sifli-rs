@@ -31,7 +31,6 @@ pub mod mailbox;
 pub mod ipc;
 #[cfg(feature = "usb")]
 pub mod usb;
-pub mod efuse;
 pub mod rng;
 pub mod lcpu;
 pub(crate) mod lpaon;

@@ -50,6 +50,11 @@ pub(crate) fn get_hclk_freq() -> Option<Hertz> {
     Some(clk_sys / HPSYS_RCC.cfgr().read().hdiv())
 }
 
+pub(crate) fn get_pclk_freq() -> Option<Hertz> {
+    let hclk = get_hclk_freq()?;
+    Some(hclk / (1u32 << HPSYS_RCC.cfgr().read().pdiv1().to_bits()))
+}
+
 /// Get current sysclk frequency from hardware registers
 pub(crate) fn get_clk_sys_freq() -> Option<Hertz> {
     match HPSYS_RCC.csr().read().sel_sys() {
