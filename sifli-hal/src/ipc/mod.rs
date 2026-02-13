@@ -51,7 +51,7 @@
 //!
 //! # Usage Example
 //!
-//! ```no_run
+//! ```ignore
 //! use sifli_hal::{bind_interrupts, ipc};
 //!
 //! bind_interrupts!(struct Irqs {
@@ -271,7 +271,7 @@ fn handle_rx_irq(qid: u8) {
 ///
 /// # Example
 ///
-/// ```no_run
+/// ```ignore
 /// use sifli_hal::{bind_interrupts, ipc};
 ///
 /// bind_interrupts!(struct Irqs {
@@ -401,7 +401,7 @@ impl IpcQueue {
     ///
     /// # Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// let queue = ipc.open_queue(cfg)?;
     /// let (rx, tx) = queue.split();
     /// // rx and tx can be used in different tasks

@@ -3,6 +3,9 @@
 //! Primary goal: make cross-core shared SRAM (HPSYS/LPSYS) non-cacheable,
 //! matching SiFli SDK `mpu_config()` behavior to prevent IPC ring buffer inconsistency from DCache.
 
+// ARMv8-M MPU registers (mair, rlar) are only available on the real target.
+#![cfg(target_arch = "arm")]
+
 use cortex_m::asm;
 
 /// SiFli SDK `mpu_armv8.h`: `ARM_MPU_ATTR_NON_CACHEABLE=4`, `ARM_MPU_ATTR(O,I)=(O<<4)|I` (when O!=0).

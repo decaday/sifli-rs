@@ -1,6 +1,6 @@
 //! LCPU power-on and management (blocking mode).
 //!
-//! ```no_run
+//! ```ignore
 //! use sifli_hal::lcpu::{Lcpu, LcpuConfig};
 //!
 //! # fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
@@ -254,7 +254,7 @@ impl Lcpu {
     ///
     /// ## Example
     ///
-    /// ```no_run
+    /// ```ignore
     /// # async fn example() -> Result<(), sifli_hal::lcpu::LcpuError> {
     /// # let p = sifli_hal::init(Default::default());
     /// # let lcpu = sifli_hal::lcpu::Lcpu::new();

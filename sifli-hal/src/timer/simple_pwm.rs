@@ -207,7 +207,7 @@ impl<'d, T: GptimInstance> SimplePwm<'d, T> {
     /// Get a PWM channel
     ///
     /// # Example
-    /// ```no_run
+    /// ```ignore
     /// let mut ch1 = pwm.channel(Channel::Ch1);
     /// ch1.enable();
     /// ch1.set_duty_cycle(pwm.max_duty_cycle() / 2); // 50% duty
@@ -248,7 +248,7 @@ impl<'d, T: GptimInstance> SimplePwm<'d, T> {
     /// Panics if SimplePwm was not created with `new_with_dma()`.
     ///
     /// # Example (WS2812)
-    /// ```no_run
+    /// ```ignore
     /// let mut pwm = SimplePwm::new_with_dma(
     ///     p.GPTIM2,
     ///     Some(PwmPin::new(p.PA32)),

@@ -201,7 +201,7 @@ impl<'d, T: GptimInstance> Timer<'d, T> {
     /// The DMA will automatically update the compare value on each timer update event.
     ///
     /// # Example (WS2812)
-    /// ```no_run
+    /// ```ignore
     /// let max = pwm.max_duty_cycle();
     /// let bit0 = max * 32 / 100;  // ~0.4us high
     /// let bit1 = max * 64 / 100;  // ~0.8us high

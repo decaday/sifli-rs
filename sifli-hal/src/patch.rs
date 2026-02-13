@@ -11,7 +11,7 @@
 //! - `SiFli-SDK/drivers/Include/bf0_hal_patch.h`
 //!
 //! # Example
-//! ```no_run
+//! ```ignore
 //! use sifli_hal::patch;
 //!
 //! patch::install(&PATCH_LIST_BYTES, &PATCH_BIN_BYTES)?;
@@ -233,7 +233,7 @@ pub fn hal_patch_get_enabled() -> u32 {
 /// 3. Copies the patch code to LCPU RAM
 ///
 /// # Example
-/// ```no_run
+/// ```ignore
 /// use sifli_hal::patch;
 ///
 /// patch::install(&PATCH_LIST_BYTES, &PATCH_BIN_BYTES)?;

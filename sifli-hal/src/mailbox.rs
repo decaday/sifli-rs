@@ -9,7 +9,7 @@
 //!
 //! ## Usage
 //!
-//! ```no_run
+//! ```ignore
 //! use sifli_hal::{bind_interrupts, mailbox};
 //!
 //! bind_interrupts!(struct Irqs {

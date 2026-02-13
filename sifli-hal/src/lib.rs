@@ -105,6 +105,7 @@ pub mod config {
 }
 pub use config::Config;
 
+#[cfg(target_arch = "arm")]
 mod mpu;
 
 /// Initialize the `sifli-hal` with the provided configuration.
@@ -146,13 +147,17 @@ fn system_init() {
         });
 
         // Consistent with SDK `mpu_config()`: invalidate stale I-cache before MPU/Cache configuration.
+        #[cfg(target_arch = "arm")]
         cp.SCB.invalidate_icache();
 
         // Configure MPU to make cross-core shared SRAM non-cacheable (matching SDK behavior).
+        #[cfg(target_arch = "arm")]
         mpu::init();
 
         // Enable Cache
+        #[cfg(target_arch = "arm")]
         cp.SCB.enable_icache();
+        #[cfg(target_arch = "arm")]
         cp.SCB.enable_dcache(&mut cp.CPUID);
     }
 }
