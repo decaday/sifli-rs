@@ -139,6 +139,7 @@ pub fn init(config: Config) -> (Peripherals, rcc::ClockControl) {
 
 fn system_init() {
     unsafe {
+        #[allow(unused_mut)] // mut needed on ARM for SCB cache ops
         let mut cp = cortex_m::Peripherals::steal();
 
         // enable CP0/CP1/CP2 Full Access

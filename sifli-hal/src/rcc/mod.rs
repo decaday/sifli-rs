@@ -3,6 +3,15 @@ use critical_section::CriticalSection;
 mod clock;
 pub use clock::*;
 
+mod clock_read;
+pub(crate) use clock_read::*;
+
+mod clock_config;
+pub use clock_config::*;
+
+mod clock_lpsys;
+pub use clock_lpsys::*;
+
 mod token;
 pub use token::*;
 

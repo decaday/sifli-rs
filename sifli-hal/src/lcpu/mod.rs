@@ -318,7 +318,7 @@ impl Lcpu {
         // If frequency exceeds 24MHz, automatically reduce it.
         let _original_freq_hz = if !config.boot.skip_frequency_check {
             debug!("Step 4: Ensuring LCPU frequency ≤ 24MHz during loading");
-            ensure_safe_lcpu_frequency()?
+            rcc::ensure_safe_lcpu_frequency().map_err(|_| LcpuError::RccError)?
         } else {
             warn!("Step 4: Skipping frequency check (as requested by config)");
             0 // Dummy value when skipped
@@ -344,7 +344,8 @@ impl Lcpu {
             "Step 6: Configuring LCPU start address (0x{:08X})",
             LpsysRam::CODE_START
         );
-        lpaon::configure_lcpu_start();
+        let (sp, pc) = read_start_vector_from_mem();
+        lpaon::configure_lcpu_start(sp, pc);
 
         // 7. Install patches and perform RF calibration (bf0_lcpu_init.c:185).
         debug!("Step 7: Installing patches and RF calibration");
@@ -408,50 +409,17 @@ impl Lcpu {
     }
 }
 
-/// Ensure LPSYS HCLK stays ≤ 24 MHz while loading the LCPU image.
-///
-/// If the current frequency exceeds the limit, this function will automatically
-/// reduce it to 24 MHz. The original frequency is returned so the caller can
-/// optionally restore it later.
-///
-/// Mirrors `bf0_lcpu_init.c:170-176` in the SDK.
-///
-/// # Returns
-///
-/// The original HCLK frequency before any changes (in Hz).
-fn ensure_safe_lcpu_frequency() -> Result<u32, LcpuError> {
-    const MAX_LOAD_FREQ_HZ: u32 = 24_000_000;
-    const MAX_LOAD_FREQ_MHZ: u32 = 24;
+/// Read the first two entries `(SP, PC)` from the LCPU vector table in memory.
+fn read_start_vector_from_mem() -> (u32, u32) {
+    let vector_addr = LpsysRam::CODE_START as *const u32;
 
-    // 1. Compute current LPSYS HCLK frequency.
-    let hclk_hz = rcc::get_lpsys_hclk_freq().ok_or(LcpuError::RccError)?.0;
-
-    // 2. If exceeds limit, automatically reduce to safe frequency.
-    if hclk_hz > MAX_LOAD_FREQ_HZ {
-        debug!(
-            "LPSYS HCLK {} Hz exceeds {} Hz limit, reducing to {} MHz for LCPU loading",
-            hclk_hz, MAX_LOAD_FREQ_HZ, MAX_LOAD_FREQ_MHZ
-        );
-
-        unsafe {
-            rcc::config_lpsys_hclk_mhz(MAX_LOAD_FREQ_MHZ).map_err(|_| LcpuError::RccError)?;
-        }
-
-        // Verify the change took effect
-        let new_hclk_hz = rcc::get_lpsys_hclk_freq().ok_or(LcpuError::RccError)?.0;
-        debug!(
-            "LPSYS HCLK reduced to {} Hz (was {} Hz)",
-            new_hclk_hz, hclk_hz
-        );
-    } else {
-        let hdiv = rcc::get_lpsys_hclk_div();
-        debug!(
-            "LPSYS HCLK within limit for LCPU loading: {} Hz (HDIV1={})",
-            hclk_hz, hdiv
-        );
+    unsafe {
+        // vector[0] (0x20400000): initial stack pointer (SP)
+        // vector[1] (0x20400004): Reset_Handler address (PC)
+        let sp = core::ptr::read_volatile(vector_addr);
+        let pc = core::ptr::read_volatile(vector_addr.add(1));
+        (sp, pc)
     }
-
-    Ok(hclk_hz)
 }
 
 /// Install patches and perform RF calibration.
@@ -519,7 +487,9 @@ where
     // [3..3+N] Parameters
 
     let mut header = [0u8; 3];
-    read_exact(rx, &mut header).await?;
+    rx.read_exact(&mut header)
+        .await
+        .map_err(|_| LcpuError::WarmupReadError)?;
 
     debug!(
         "[hci] warmup header: {:02X} {:02X} {:02X}",
@@ -538,7 +508,9 @@ where
     let param_len = header[2] as usize;
     if param_len > 0 {
         let mut params = [0u8; 255];
-        read_exact(rx, &mut params[..param_len]).await?;
+        rx.read_exact(&mut params[..param_len])
+            .await
+            .map_err(|_| LcpuError::WarmupReadError)?;
         debug!(
             "[hci] warmup params ({} bytes): {:02X}",
             param_len,
@@ -550,24 +522,3 @@ where
     Ok(())
 }
 
-/// Read exact number of bytes (helper for embedded_io_async::Read).
-async fn read_exact<R>(rx: &mut R, buf: &mut [u8]) -> Result<(), LcpuError>
-where
-    R: embedded_io_async::Read,
-{
-    let mut offset = 0;
-    while offset < buf.len() {
-        match rx.read(&mut buf[offset..]).await {
-            Ok(0) => {
-                error!("[hci] unexpected EOF while reading warmup event");
-                return Err(LcpuError::WarmupReadError);
-            }
-            Ok(n) => offset += n,
-            Err(_e) => {
-                error!("[hci] read error while consuming warmup event");
-                return Err(LcpuError::WarmupReadError);
-            }
-        }
-    }
-    Ok(())
-}
