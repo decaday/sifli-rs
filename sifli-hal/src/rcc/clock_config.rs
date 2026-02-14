@@ -247,67 +247,44 @@ impl ConfigBuilder {
             }
         }
 
-        // Check frequency limits
+        // Check frequency limits (bypassed when `unchecked-overclocking` is enabled)
         let sysclk_hz = self.get_sysclk_freq_hz();
-        if sysclk_hz > 384_000_000 {
-            ::core::panic!("sysclk frequency exceeds maximum limit (384 MHz)");
-        }
+        const_rcc_assert!(sysclk_hz <= 384_000_000, "sysclk frequency exceeds maximum limit (384 MHz)");
         if let Sysclk::Dll1 = self.sys {
-            if sysclk_hz < 24_000_000 {
-                ::core::panic!("DLL1 sysclk frequency below minimum limit (24 MHz)");
-            }
+            const_rcc_assert!(sysclk_hz >= 24_000_000, "DLL1 sysclk frequency below minimum limit (24 MHz)");
         }
 
         let hclk_hz = self.get_hclk_freq_hz();
-        if hclk_hz > 240_000_000 {
-            ::core::panic!("HCLK frequency exceeds maximum DVFS limit (240 MHz)");
-        }
+        const_rcc_assert!(hclk_hz <= 240_000_000, "HCLK frequency exceeds maximum DVFS limit (240 MHz)");
 
         // Check PCLK frequency limits based on DVFS mode
         let pclk1_hz = hclk_hz >> (self.pdiv1 as u32);
         let pclk2_hz = hclk_hz >> (self.pdiv2 as u32);
         if hclk_hz > 48_000_000 {
             // S mode (enhanced): pclk1 ≤ 120 MHz, pclk2 ≤ 7.5 MHz
-            if pclk1_hz > 120_000_000 {
-                ::core::panic!("PCLK1 exceeds S-mode limit (120 MHz), increase pdiv1");
-            }
-            if pclk2_hz > 7_500_000 {
-                ::core::panic!("PCLK2 exceeds S-mode limit (7.5 MHz), increase pdiv2");
-            }
+            const_rcc_assert!(pclk1_hz <= 120_000_000, "PCLK1 exceeds S-mode limit (120 MHz), increase pdiv1");
+            const_rcc_assert!(pclk2_hz <= 7_500_000, "PCLK2 exceeds S-mode limit (7.5 MHz), increase pdiv2");
         } else {
             // D mode (basic): pclk1 ≤ 48 MHz, pclk2 ≤ 6 MHz
-            if pclk1_hz > 48_000_000 {
-                ::core::panic!("PCLK1 exceeds D-mode limit (48 MHz), increase pdiv1");
-            }
-            if pclk2_hz > 6_000_000 {
-                ::core::panic!("PCLK2 exceeds D-mode limit (6 MHz), increase pdiv2");
-            }
+            const_rcc_assert!(pclk1_hz <= 48_000_000, "PCLK1 exceeds D-mode limit (48 MHz), increase pdiv1");
+            const_rcc_assert!(pclk2_hz <= 6_000_000, "PCLK2 exceeds D-mode limit (6 MHz), increase pdiv2");
         }
 
         // Check DLL1 frequency range if configured
         if let Some(dll1) = self.dll1 {
             let dll1_freq = 24_000_000 * (dll1.stg.to_bits() as u32 + 1);
-            if dll1_freq < 24_000_000 || dll1_freq > 384_000_000 {
-                ::core::panic!("DLL1 frequency out of valid range (24-384 MHz)");
-            }
+            const_rcc_assert!(dll1_freq >= 24_000_000 && dll1_freq <= 384_000_000, "DLL1 frequency out of valid range (24-384 MHz)");
         }
 
         // Check DLL2 frequency range if configured
         if let Some(dll2) = self.dll2 {
             let dll2_freq = 24_000_000 * (dll2.stg.to_bits() as u32 + 1);
-            if dll2_freq < 24_000_000 || dll2_freq > 384_000_000 {
-                ::core::panic!("DLL2 frequency out of valid range (24-384 MHz)");
-            }
+            const_rcc_assert!(dll2_freq >= 24_000_000 && dll2_freq <= 384_000_000, "DLL2 frequency out of valid range (24-384 MHz)");
 
-            // Check DLL2 vs DVFS mode limit (inline the logic)
+            // Check DLL2 vs DVFS mode limit
             let hclk_mhz = hclk_hz / 1_000_000;
-            // D0/D1 modes (hclk <= 48MHz): DLL2 not available
-            // S0/S1 modes (hclk > 48MHz): DLL2 <= 288MHz
-            if hclk_mhz <= 48 {
-                // D mode: DLL2 cannot be used as clock source
-                // (but it's ok to configure it, just warn if it's actually used)
-            } else if dll2_freq > 288_000_000 {
-                ::core::panic!("DLL2 frequency exceeds DVFS S-mode limit (288 MHz)");
+            if hclk_mhz > 48 {
+                const_rcc_assert!(dll2_freq <= 288_000_000, "DLL2 frequency exceeds DVFS S-mode limit (288 MHz)");
             }
         }
     }
