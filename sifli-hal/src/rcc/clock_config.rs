@@ -7,8 +7,7 @@ use crate::pac::{HPSYS_AON, HPSYS_RCC};
 use crate::time::Hertz;
 use core::sync::atomic::{compiler_fence, Ordering};
 
-use super::{get_clk_dll2_freq, get_clk_sys_freq, get_hclk_freq, get_pclk_freq};
-use super::{CLK_HRC48_FREQ, CLK_HXT48_FREQ, CLK_LRC10_FREQ, CLK_LRC32_FREQ};
+use super::{get_hclk_freq, read_hpsys_clocks_from_hw};
 use super::{
     ClockMux, Clocks, Dll, DllStage, HclkPrescaler, Mpisel, PclkPrescaler, Rtcsel, Sysclk,
     Usbsel, Wdtsel, Lpsel, Ticksel,
@@ -390,95 +389,6 @@ fn apply_dividers_and_sysclk(config: &ConfigBuilder) {
     }
 }
 
-/// Read current HPSYS clock frequencies from hardware and build a partial `Clocks`.
-///
-/// Used by both `init()` and `reconfigure_sysclk()` to build `Clocks` from hardware state.
-fn read_hpsys_clocks_from_hw() -> Clocks {
-    Clocks {
-        sysclk: get_clk_sys_freq().into(),
-        hclk: get_hclk_freq().into(),
-        pclk: get_pclk_freq().into(),
-        pclk2: {
-            // PCLK2 uses pdiv2
-            let hclk = get_hclk_freq();
-            let pdiv2 = HPSYS_RCC.cfgr().read().pdiv2();
-            hclk.map(|h| h / (1u32 << pdiv2.to_bits())).into()
-        },
-        dll1: super::get_clk_dll1_freq().into(),
-        dll2: get_clk_dll2_freq().into(),
-        clk_peri: {
-            let perisel = HPSYS_RCC.csr().read().sel_peri();
-            Some(match perisel {
-                Perisel::Hrc48 => CLK_HRC48_FREQ,
-                Perisel::Hxt48 => CLK_HXT48_FREQ,
-            })
-            .into()
-        },
-        clk_peri_div2: {
-            let perisel = HPSYS_RCC.csr().read().sel_peri();
-            Some(match perisel {
-                Perisel::Hrc48 => CLK_HRC48_FREQ / 2u32,
-                Perisel::Hxt48 => CLK_HXT48_FREQ / 2u32,
-            })
-            .into()
-        },
-        clk_usb: {
-            let usb_source = super::get_clk_usb_source();
-            let usb_div = super::get_clk_usb_div();
-            let source_freq = match usb_source {
-                Usbsel::Sysclk => get_clk_sys_freq(),
-                Usbsel::Dll2 => get_clk_dll2_freq(),
-            };
-            source_freq
-                .map(|f| if usb_div > 0 { f / usb_div as u32 } else { f })
-                .into()
-        },
-        clk_wdt: {
-            let wdtsel = PMUC.cr().read().sel_lpclk();
-            Some(match wdtsel {
-                Wdtsel::Lrc10 => CLK_LRC10_FREQ,
-                Wdtsel::Lrc32 => CLK_LRC32_FREQ,
-            })
-            .into()
-        },
-        clk_rtc: {
-            // TODO: read from RTC.CR.LPCKSEL when available
-            Some(CLK_LRC10_FREQ).into()
-        },
-        clk_mpi1: {
-            let mpi1sel = HPSYS_RCC.csr().read().sel_mpi1();
-            let perisel = HPSYS_RCC.csr().read().sel_peri();
-            let freq = match mpi1sel {
-                Mpisel::Peri => Some(match perisel {
-                    Perisel::Hrc48 => CLK_HRC48_FREQ,
-                    Perisel::Hxt48 => CLK_HXT48_FREQ,
-                }),
-                Mpisel::Dll2 => get_clk_dll2_freq(),
-                Mpisel::Dll1 => super::get_clk_dll1_freq(),
-                _ => Some(CLK_HXT48_FREQ), // Reserved values, fallback
-            };
-            freq.into()
-        },
-        clk_mpi2: {
-            let mpi2sel = HPSYS_RCC.csr().read().sel_mpi2();
-            let perisel = HPSYS_RCC.csr().read().sel_peri();
-            let freq = match mpi2sel {
-                Mpisel::Peri => Some(match perisel {
-                    Perisel::Hrc48 => CLK_HRC48_FREQ,
-                    Perisel::Hxt48 => CLK_HXT48_FREQ,
-                }),
-                Mpisel::Dll2 => get_clk_dll2_freq(),
-                Mpisel::Dll1 => super::get_clk_dll1_freq(),
-                _ => Some(CLK_HXT48_FREQ), // Reserved values, fallback
-            };
-            freq.into()
-        },
-        // Audio PLL is managed by AUDCODEC driver, default to None here
-        clk_aud_pll: None.into(),
-        clk_aud_pll_div16: None.into(),
-    }
-}
-
 // =============================================================================
 // Runtime Reconfiguration
 // =============================================================================
@@ -515,7 +425,7 @@ pub fn reconfigure_sysclk(config: Config) {
 
     // Update global frequency state from hardware
     unsafe {
-        let prev = get_freqs().clone();
+        let prev = *get_freqs();
         let hw = read_hpsys_clocks_from_hw();
         set_freqs(Clocks {
             // Preserve audio PLL state (managed by AUDCODEC driver)

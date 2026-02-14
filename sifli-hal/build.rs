@@ -117,7 +117,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mailbox_content = fs::read_to_string(&mailbox_path)?;
     let mailbox: build_serde::Mailbox = serde_yaml::from_str(&mailbox_content)
         .map_err(|e| format!("Failed to parse mailbox.yaml: {}", e))?;
-    
+
+    // Read and parse clocks.yaml
+    let clocks_path = data_dir.join("clocks.yaml");
+    let clocks_content = fs::read_to_string(&clocks_path)?;
+    let clock_domains: build_serde::ClockDomains = serde_yaml::from_str(&clocks_content)
+        .map_err(|e| format!("Failed to parse clocks.yaml: {}", e))?;
+
     // Get output path from env
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
     let dest_path = out_dir.join("_generated.rs");
@@ -139,7 +145,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     token_stream.extend(peripherals_singleton);
 
     // Generate rcc implementations
-    let rcc_impls = generate_rcc_impls(&peripherals, &fieldsets, &lpsys_fieldsets);
+    let rcc_impls = generate_rcc_impls(&peripherals, &fieldsets, &lpsys_fieldsets, &clock_domains);
     token_stream.extend(rcc_impls);
 
     // Generate pin implementations
@@ -166,6 +172,7 @@ fn generate_rcc_impls(
     peripherals: &Peripherals,
     fieldsets: &BTreeMap<String, FieldSet>,
     lpsys_fieldsets: &Option<BTreeMap<String, FieldSet>>,
+    clock_domains: &build_serde::ClockDomains,
 ) -> TokenStream {
     let mut implementations = TokenStream::new();
 
@@ -315,11 +322,19 @@ fn generate_rcc_impls(
 
     implementations.extend(quote! {use crate::time::Hertz;});
 
+    // Build clock domain lookup from clocks.yaml
+    let all_clocks: BTreeMap<&str, &build_serde::ClockDomain> = clock_domains
+        .hpsys.iter().chain(clock_domains.lpsys.iter())
+        .map(|c| (c.name.as_str(), c))
+        .collect();
+
     // Generate RccGetFreq for HCPU peripherals
     for peripheral in &peripherals.hcpu {
         if let Some(clock) = peripheral.clock.clone() {
+            let domain = all_clocks.get(clock.as_str())
+                .unwrap_or_else(|| panic!("Unknown clock domain '{}' for peripheral '{}'", clock, peripheral.name));
             let clock_name_ident = format_ident!("{}", clock);
-            let clock_token_type = clock_to_token_type(&clock);
+            let clock_token_ident = format_ident!("{}", domain.token);
             let peripheral_name_ident = format_ident!("{}", peripheral.name);
             let impl_tokens = quote! {
                 impl crate::rcc::SealedRccGetFreq for #peripheral_name_ident {
@@ -328,7 +343,7 @@ fn generate_rcc_impls(
                     }
                 }
                 impl crate::rcc::RccGetFreq for #peripheral_name_ident {
-                    type Clock = #clock_token_type;
+                    type Clock = crate::rcc::#clock_token_ident;
                 }
             };
 
@@ -341,17 +356,21 @@ fn generate_rcc_impls(
     // because LCPU may change LPSYS clocks independently.
     for peripheral in &peripherals.lcpu {
         if let Some(clock) = peripheral.clock.clone() {
-            let clock_token_type = clock_to_token_type(&clock);
+            let domain = all_clocks.get(clock.as_str())
+                .unwrap_or_else(|| panic!("Unknown clock domain '{}' for peripheral '{}'", clock, peripheral.name));
+            let clock_token_ident = format_ident!("{}", domain.token);
+            let read_fn_name = domain.read_fn.as_ref()
+                .unwrap_or_else(|| panic!("LPSYS clock domain '{}' must have a read_fn", clock));
+            let read_fn_ident = format_ident!("{}", read_fn_name);
             let peripheral_name_ident = format_ident!("{}", peripheral.name);
-            let freq_expr = lpsys_clock_to_hw_read(&clock);
             let impl_tokens = quote! {
                 impl crate::rcc::SealedRccGetFreq for #peripheral_name_ident {
                     fn get_freq() -> Option<Hertz> {
-                        #freq_expr
+                        crate::rcc::#read_fn_ident()
                     }
                 }
                 impl crate::rcc::RccGetFreq for #peripheral_name_ident {
-                    type Clock = #clock_token_type;
+                    type Clock = crate::rcc::#clock_token_ident;
                 }
             };
 
@@ -360,34 +379,6 @@ fn generate_rcc_impls(
     }
 
     implementations
-}
-
-fn lpsys_clock_to_hw_read(clock: &str) -> TokenStream {
-    match clock {
-        "lp_hclk" => quote! { crate::rcc::get_lpsys_hclk_freq() },
-        "lp_mac_clk" => quote! { crate::rcc::get_lpsys_mac_clk_freq() },
-        _ => panic!("Unknown LPSYS clock domain: {}", clock),
-    }
-}
-
-fn clock_to_token_type(clock: &str) -> TokenStream {
-    match clock {
-        "hclk" => quote! { crate::rcc::Hclk },
-        "pclk" => quote! { crate::rcc::Pclk },
-        "pclk2" => quote! { crate::rcc::Pclk2 },
-        "clk_peri" => quote! { crate::rcc::ClkPeri },
-        "clk_peri_div2" => quote! { crate::rcc::ClkPeriDiv2 },
-        "clk_usb" => quote! { crate::rcc::ClkUsb },
-        "clk_wdt" => quote! { crate::rcc::ClkWdt },
-        "clk_rtc" => quote! { crate::rcc::ClkRtc },
-        "clk_mpi1" => quote! { crate::rcc::ClkMpi1 },
-        "clk_mpi2" => quote! { crate::rcc::ClkMpi2 },
-        "clk_aud_pll" => quote! { crate::rcc::ClkAudPll },
-        "clk_aud_pll_div16" => quote! { crate::rcc::ClkAudPllDiv16 },
-        "lp_hclk" => quote! { crate::rcc::LpHclk },
-        "lp_mac_clk" => quote! { crate::rcc::LpMacClk },
-        _ => panic!("Unknown clock domain: {}", clock),
-    }
 }
 
 fn find_field_in_registers<'a>(

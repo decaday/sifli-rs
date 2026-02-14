@@ -118,6 +118,25 @@ pub struct MailboxConfig {
     pub channel_total: u8,
 }
 
+// ---------- clocks.yaml ----------
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClockDomains {
+    #[serde(default)]
+    pub hpsys: Vec<ClockDomain>,
+    #[serde(default)]
+    pub lpsys: Vec<ClockDomain>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClockDomain {
+    pub name: String,
+    pub token: String,
+    /// Hardware read function for LPSYS clocks (bypasses cache).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_fn: Option<String>,
+}
+
 // ---------- HPSYS_xxx.yaml ----------
 
 // Some code in this file is copied from [chiptool](https://github.com/embassy-rs/chiptool/blob/main/src/ir.rs)
