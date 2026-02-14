@@ -272,7 +272,6 @@ impl<'d> Adc<'d, Blocking> {
     /// - `config`: ADC timing and operational configuration.
     pub fn new_blocking(
         inner: impl Peripheral<P = peripherals::GPADC> + 'd,
-        _clk: &'d crate::rcc::Pclk,
         config: Config,
     ) -> Self {
         Self::new_inner(inner, config)
@@ -297,7 +296,6 @@ impl<'d> Adc<'d, Async> {
     pub fn new(
         inner: impl Peripheral<P = peripherals::GPADC> + 'd,
         _irq: impl Binding<interrupt::typelevel::GPADC, InterruptHandler>,
-        _clk: &'d crate::rcc::Pclk,
         config: Config,
     ) -> Self {
         let s = Self::new_inner(inner, config);

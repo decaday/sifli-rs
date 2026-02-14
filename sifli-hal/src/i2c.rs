@@ -98,7 +98,6 @@ impl<'d, T: Instance> I2c<'d, T, Blocking> {
         peri: impl Peripheral<P = T> + 'd,
         scl: impl Peripheral<P = impl SclPin<T>> + 'd,
         sda: impl Peripheral<P = impl SdaPin<T>> + 'd,
-        _clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Self {
         into_ref!(peri, scl, sda);

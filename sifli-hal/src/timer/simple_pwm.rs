@@ -111,11 +111,10 @@ impl<'d, T: GptimInstance> SimplePwm<'d, T> {
         _ch2: Option<PwmPin<'d, T, Ch2>>,
         _ch3: Option<PwmPin<'d, T, Ch3>>,
         _ch4: Option<PwmPin<'d, T, Ch4>>,
-        clk: &'d <T as crate::rcc::RccGetFreq>::Clock,
         freq: Hertz,
         counting_mode: CountingMode,
     ) -> Self {
-        Self::new_inner(tim, None, clk, freq, counting_mode)
+        Self::new_inner(tim, None, freq, counting_mode)
     }
     
     /// Create a new SimplePwm with Update DMA support
@@ -138,7 +137,6 @@ impl<'d, T: GptimInstance> SimplePwm<'d, T> {
         _ch3: Option<PwmPin<'d, T, Ch3>>,
         _ch4: Option<PwmPin<'d, T, Ch4>>,
         update_dma: impl Peripheral<P = impl super::UpDma<T>> + 'd,
-        clk: &'d <T as crate::rcc::RccGetFreq>::Clock,
         freq: Hertz,
         counting_mode: CountingMode,
     ) -> Self {
@@ -149,18 +147,17 @@ impl<'d, T: GptimInstance> SimplePwm<'d, T> {
             request: dma_req,
         });
 
-        Self::new_inner(tim, dma_and_req, clk, freq, counting_mode)
+        Self::new_inner(tim, dma_and_req, freq, counting_mode)
     }
     
     /// Internal constructor
     fn new_inner(
         tim: impl Peripheral<P = T> + 'd,
         update_dma: Option<ChannelAndRequest<'d>>,
-        clk: &'d <T as crate::rcc::RccGetFreq>::Clock,
         freq: Hertz,
         counting_mode: CountingMode,
     ) -> Self {
-        let mut inner = Timer::new(tim, clk);
+        let mut inner = Timer::new(tim);
         
         // Configure counting mode
         inner.set_counting_mode(counting_mode);

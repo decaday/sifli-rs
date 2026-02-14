@@ -17,11 +17,11 @@ use embedded_hal_async::delay::DelayNs;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let (p, clk) = sifli_hal::init(Default::default());
+    let (p, _clk) = sifli_hal::init(Default::default());
 
     let mut config = Config::default();
     config.baudrate = 1000000;
-    let mut usart = Uart::new_blocking(p.USART1, p.PA18, p.PA19, &clk.clk_peri, config).unwrap();
+    let mut usart = Uart::new_blocking(p.USART1, p.PA18, p.PA19, config).unwrap();
 
     unwrap!(usart.blocking_write(b"Hello SiFli!\n"));
     unwrap!(usart.blocking_write(b"Hello Embassy!\n"));

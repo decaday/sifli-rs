@@ -371,7 +371,6 @@ impl<'d, T: Instance> UartTx<'d, T, Async> {
         peri: impl Peripheral<P = T> + 'd,
         tx: impl Peripheral<P = impl TxdPin<T>> + 'd,
         tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -379,7 +378,6 @@ impl<'d, T: Instance> UartTx<'d, T, Async> {
             new_pin!(tx, AfType::new(Pull::Up)),
             None,
             new_dma!(tx_dma),
-            clk,
             config,
         )
     }
@@ -390,7 +388,6 @@ impl<'d, T: Instance> UartTx<'d, T, Async> {
         tx: impl Peripheral<P = impl TxdPin<T>> + 'd,
         cts: impl Peripheral<P = impl CtsPin<T>> + 'd,
         tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -398,7 +395,6 @@ impl<'d, T: Instance> UartTx<'d, T, Async> {
             new_pin!(tx, AfType::new(Pull::Up)),
             new_pin!(cts, AfType::new(Pull::None)),
             new_dma!(tx_dma),
-            clk,
             config,
         )
     }
@@ -433,7 +429,6 @@ impl<'d, T: Instance> UartTx<'d, T, Blocking> {
     pub fn new_blocking(
         peri: impl Peripheral<P = T> + 'd,
         tx: impl Peripheral<P = impl TxdPin<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -441,7 +436,6 @@ impl<'d, T: Instance> UartTx<'d, T, Blocking> {
             new_pin!(tx, AfType::new(Pull::Up)),
             None,
             None,
-            clk,
             config,
         )
     }
@@ -451,7 +445,6 @@ impl<'d, T: Instance> UartTx<'d, T, Blocking> {
         peri: impl Peripheral<P = T> + 'd,
         tx: impl Peripheral<P = impl TxdPin<T>> + 'd,
         cts: impl Peripheral<P = impl CtsPin<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -459,7 +452,6 @@ impl<'d, T: Instance> UartTx<'d, T, Blocking> {
             new_pin!(tx, AfType::new(Pull::Up)),
             new_pin!(cts, AfType::new(config.rx_pull)),
             None,
-            clk,
             config,
         )
     }
@@ -471,7 +463,6 @@ impl<'d, T: Instance, M: Mode> UartTx<'d, T, M> {
         tx: Option<PeripheralRef<'d, AnyPin>>,
         cts: Option<PeripheralRef<'d, AnyPin>>,
         tx_dma: Option<ChannelAndRequest<'d>>,
-        _clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         let mut this = Self {
@@ -603,7 +594,6 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         rx: impl Peripheral<P = impl RxdPin<T>> + 'd,
         rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -611,7 +601,6 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
             new_pin!(rx, AfType::new(config.rx_pull)),
             None,
             new_dma!(rx_dma),
-            clk,
             config,
         )
     }
@@ -623,7 +612,6 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
         rx: impl Peripheral<P = impl RxdPin<T>> + 'd,
         rts: impl Peripheral<P = impl RtsPin<T>> + 'd,
         rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -631,7 +619,6 @@ impl<'d, T: Instance> UartRx<'d, T, Async> {
             new_pin!(rx, AfType::new(config.rx_pull)),
             new_pin!(rts, AfType::new(Pull::Up)),
             new_dma!(rx_dma),
-            clk,
             config,
         )
     }
@@ -863,14 +850,12 @@ impl<'d, T: Instance> UartRx<'d, T, Blocking> {
     pub fn new_blocking(
         peri: impl Peripheral<P = T> + 'd,
         rx: impl Peripheral<P = impl RxdPin<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(peri,
             new_pin!(rx, AfType::new(config.rx_pull)),
             None,
             None,
-            clk,
             config
         )
     }
@@ -880,7 +865,6 @@ impl<'d, T: Instance> UartRx<'d, T, Blocking> {
         peri: impl Peripheral<P = T> + 'd,
         rx: impl Peripheral<P = impl RxdPin<T>> + 'd,
         rts: impl Peripheral<P = impl RtsPin<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -888,7 +872,6 @@ impl<'d, T: Instance> UartRx<'d, T, Blocking> {
             new_pin!(rx, AfType::new(config.rx_pull)),
             new_pin!(rts, AfType::new(Pull::Up)),
             None,
-            clk,
             config,
         )
     }
@@ -900,7 +883,6 @@ impl<'d, T: Instance, M: Mode> UartRx<'d, T, M> {
         rx: Option<PeripheralRef<'d, AnyPin>>,
         rts: Option<PeripheralRef<'d, AnyPin>>,
         rx_dma: Option<ChannelAndRequest<'d>>,
-        _clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         let mut this = Self {
@@ -1031,7 +1013,6 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
         rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -1042,7 +1023,6 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
             None,
             new_dma!(tx_dma),
             new_dma!(rx_dma),
-            clk,
             config,
         )
     }
@@ -1057,7 +1037,6 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
         cts: impl Peripheral<P = impl CtsPin<T>> + 'd,
         tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
         rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -1068,7 +1047,6 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
             new_pin!(cts, AfType::new(Pull::None)),
             new_dma!(tx_dma),
             new_dma!(rx_dma),
-            clk,
             config,
         )
     }
@@ -1091,7 +1069,6 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
         rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         mut config: Config,
         readback: HalfDuplexReadback,
         half_duplex: HalfDuplexConfig,
@@ -1106,7 +1083,6 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
             None,
             new_dma!(tx_dma),
             new_dma!(rx_dma),
-            clk,
             config,
         )
     }
@@ -1130,7 +1106,6 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
         _irq: impl interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>> + 'd,
         tx_dma: impl Peripheral<P = impl TxDma<T>> + 'd,
         rx_dma: impl Peripheral<P = impl RxDma<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         mut config: Config,
         readback: HalfDuplexReadback,
         half_duplex: HalfDuplexConfig,
@@ -1145,7 +1120,6 @@ impl<'d, T: Instance> Uart<'d, T, Async> {
             None,
             new_dma!(tx_dma),
             new_dma!(rx_dma),
-            clk,
             config,
         )
     }
@@ -1177,7 +1151,6 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
         peri: impl Peripheral<P = T> + 'd,
         rx: impl Peripheral<P = impl RxdPin<T>> + 'd,
         tx: impl Peripheral<P = impl TxdPin<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -1188,7 +1161,6 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
             None,
             None,
             None,
-            clk,
             config,
         )
     }
@@ -1200,7 +1172,6 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
         tx: impl Peripheral<P = impl TxdPin<T>> + 'd,
         rts: impl Peripheral<P = impl RtsPin<T>> + 'd,
         cts: impl Peripheral<P = impl CtsPin<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         Self::new_inner(
@@ -1211,7 +1182,6 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
             new_pin!(cts, AfType::new(Pull::None)),
             None,
             None,
-            clk,
             config,
         )
     }
@@ -1230,7 +1200,6 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
     pub fn new_blocking_half_duplex(
         peri: impl Peripheral<P = T> + 'd,
         tx: impl Peripheral<P = impl TxdPin<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         mut config: Config,
         readback: HalfDuplexReadback,
         half_duplex: HalfDuplexConfig,
@@ -1245,7 +1214,6 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
             None,
             None,
             None,
-            clk,
             config,
         )
     }
@@ -1263,7 +1231,6 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
     pub fn new_blocking_half_duplex_on_rx(
         peri: impl Peripheral<P = T> + 'd,
         rx: impl Peripheral<P = impl RxdPin<T>> + 'd,
-        clk: &'d <T as rcc::RccGetFreq>::Clock,
         mut config: Config,
         readback: HalfDuplexReadback,
         half_duplex: HalfDuplexConfig,
@@ -1278,7 +1245,6 @@ impl<'d, T: Instance> Uart<'d, T, Blocking> {
             None,
             None,
             None,
-            clk,
             config,
         )
     }
@@ -1293,7 +1259,6 @@ impl<'d, T: Instance, M: Mode> Uart<'d, T, M> {
         cts: Option<PeripheralRef<'d, AnyPin>>,
         tx_dma: Option<ChannelAndRequest<'d>>,
         rx_dma: Option<ChannelAndRequest<'d>>,
-        _clk: &'d <T as rcc::RccGetFreq>::Clock,
         config: Config,
     ) -> Result<Self, ConfigError> {
         let state = T::state();

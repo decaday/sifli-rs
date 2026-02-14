@@ -23,7 +23,7 @@ bind_interrupts!(struct Irqs {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let (p, clk) = sifli_hal::init(Default::default());
+    let (p, _clk) = sifli_hal::init(Default::default());
 
     let mut tx_buf = [0u8; 256];
     let mut rx_buf = [0u8; 256];
@@ -39,7 +39,6 @@ async fn main(_spawner: Spawner) {
         p.PA19,
         &mut tx_buf,
         &mut rx_buf,
-        &clk.clk_peri,
         config,
     )
     .unwrap();

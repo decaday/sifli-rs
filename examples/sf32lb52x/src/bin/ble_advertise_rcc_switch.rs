@@ -69,7 +69,7 @@ struct BatteryService {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let (p, clk) = sifli_hal::init(Default::default());
+    let (p, _clk) = sifli_hal::init(Default::default());
 
     let mut uart_config = UsartConfig::default();
     uart_config.baudrate = 1_000_000;
@@ -80,7 +80,6 @@ async fn main(_spawner: Spawner) {
         Irqs,
         p.DMAC1_CH1,
         p.DMAC1_CH2,
-        &clk.clk_peri,
         uart_config,
     )
     .unwrap();
