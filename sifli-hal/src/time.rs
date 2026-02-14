@@ -104,6 +104,9 @@ impl Add<Hertz> for Hertz {
 pub struct MaybeHertz(u32);
 
 impl MaybeHertz {
+    /// Represents an unknown/unset frequency (equivalent to `None`).
+    pub const NONE: Self = Self(0);
+
     /// Same as calling the `.into()` function, but without type inference.
     pub fn to_hertz(self) -> Option<Hertz> {
         self.into()

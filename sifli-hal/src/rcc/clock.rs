@@ -6,33 +6,43 @@ pub use crate::pac::hpsys_rcc::vals::mux::{
 pub use crate::pac::hpsys_rcc::vals::{Dllstg as DllStage, Pdiv as PclkPrescaler, Sysclk};
 
 use crate::time::{Hertz, MaybeHertz};
-use core::mem::MaybeUninit;
 use core::ops;
+use core::sync::atomic::{AtomicBool, Ordering};
 
 // =============================================================================
 // Global Clock State
 // =============================================================================
 
-/// Frozen clock frequencies.
-///
-/// The existence of this value indicates that the clock configuration can no longer be changed.
-static mut CLOCK_FREQS: MaybeUninit<Clocks> = MaybeUninit::uninit();
+/// Whether `CLOCK_FREQS` has been initialized by `set_freqs()`.
+static CLOCK_FREQS_INIT: AtomicBool = AtomicBool::new(false);
+
+/// Cached HPSYS clock frequencies (LPSYS clocks are always read from hardware).
+static mut CLOCK_FREQS: Clocks = Clocks::ZERO;
 
 /// Sets the clock frequencies.
 ///
 /// Safety: Sets a mutable global.
 pub(crate) unsafe fn set_freqs(freqs: Clocks) {
     debug!("rcc: {:?}", freqs);
-    unsafe { CLOCK_FREQS = MaybeUninit::new(freqs) };
+    unsafe { CLOCK_FREQS = freqs };
+    CLOCK_FREQS_INIT.store(true, Ordering::Release);
 }
 
-/// Safety: Reads a mutable global.
+/// Safety: Reads a mutable global. Must be called after `set_freqs()`.
 pub(crate) unsafe fn get_freqs() -> &'static Clocks {
-    unsafe { (*core::ptr::addr_of_mut!(CLOCK_FREQS)).assume_init_ref() }
+    unsafe { &*core::ptr::addr_of!(CLOCK_FREQS) }
 }
 
-/// Get the current clock configuration of the chip.
+/// Get the current HPSYS clock configuration.
+///
+/// # Panics
+///
+/// Panics if called before `init()`.
 pub fn clocks() -> &'static Clocks {
+    assert!(
+        CLOCK_FREQS_INIT.load(Ordering::Acquire),
+        "rcc: clocks() called before init()"
+    );
     unsafe { get_freqs() }
 }
 
@@ -265,5 +275,24 @@ pub struct Clocks {
     pub clk_aud_pll: MaybeHertz,
     /// Audio PLL / 16 clock
     pub clk_aud_pll_div16: MaybeHertz,
+}
 
+impl Clocks {
+    const ZERO: Self = Self {
+        sysclk: MaybeHertz::NONE,
+        hclk: MaybeHertz::NONE,
+        pclk: MaybeHertz::NONE,
+        pclk2: MaybeHertz::NONE,
+        dll1: MaybeHertz::NONE,
+        dll2: MaybeHertz::NONE,
+        clk_peri: MaybeHertz::NONE,
+        clk_peri_div2: MaybeHertz::NONE,
+        clk_usb: MaybeHertz::NONE,
+        clk_wdt: MaybeHertz::NONE,
+        clk_rtc: MaybeHertz::NONE,
+        clk_mpi1: MaybeHertz::NONE,
+        clk_mpi2: MaybeHertz::NONE,
+        clk_aud_pll: MaybeHertz::NONE,
+        clk_aud_pll_div16: MaybeHertz::NONE,
+    };
 }
