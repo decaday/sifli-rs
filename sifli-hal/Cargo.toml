@@ -129,13 +129,3 @@ unchecked-overclocking = []
 [package.metadata.docs.rs]
 default-target = "thumbv8m.main-none-eabihf"
 
-# Patch embassy crates to use embedded-io 0.7 compatible versions
-[patch.crates-io]
-embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }

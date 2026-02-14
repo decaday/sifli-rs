@@ -54,22 +54,10 @@ trouble-host = { version = "0.6.0", features = [
 
 # USB dependencies
 embassy-usb = { version = "0.5", features = ["defmt"] }
-usbd-hid = { version = "0.9", features = ["defmt"] }
+usbd-hid = { version = "0.8", features = ["defmt"] }
 
 # Display dependencies
 embedded-graphics = { version = "0.8", features = ["defmt"] }
 display-driver = { version = "0.1.0" }
 display-driver-co5300 = { version = "0.1.1"}
 
-# Patch embassy crates to use embedded-io 0.7 compatible versions
-[patch.crates-io]
-embassy-sync = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-time-driver = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-time-queue-utils = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-time = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-futures = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-embedded-hal = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-usb-driver = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-usb = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
-embassy-executor = { git = "https://github.com/embassy-rs/embassy", rev = "dff15aeb5fb5b206684dd673f6c48cd77e2548c7" }
