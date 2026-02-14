@@ -12,7 +12,7 @@ use sifli_hal::gpio;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let (p, _clk) = sifli_hal::init(Default::default());
+    let p = sifli_hal::init(Default::default());
 
     // SF32LB52-DevKit-LCD LED pin
     let mut led = gpio::Output::new(p.PA26, gpio::Level::Low);

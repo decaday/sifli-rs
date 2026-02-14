@@ -17,7 +17,7 @@ use embedded_hal_async::delay::DelayNs;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let (p, _clk) = sifli_hal::init(Default::default());
+    let p = sifli_hal::init(Default::default());
 
     let mut config = Config::default();
     config.baudrate = 1000000;

@@ -16,7 +16,7 @@ use sifli_hal::gpio::{Input, Level, Output, Pull};
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let (p, _clk) = sifli_hal::init(Default::default());
+    let p = sifli_hal::init(Default::default());
 
     // SF32LB52-DevKit-LCD KEY2 pin, with a pull down resister on the board
     let mut button = Input::new(p.PA11, Pull::None);

@@ -11,7 +11,7 @@ use sifli_hal::efuse::Efuse;
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let (p, _clk) = sifli_hal::init(Default::default());
+    let p = sifli_hal::init(Default::default());
 
     let efuse = match Efuse::new(p.EFUSEC) {
         Ok(v) => v,

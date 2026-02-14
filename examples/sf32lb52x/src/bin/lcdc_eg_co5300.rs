@@ -83,7 +83,7 @@ async fn main(_spawner: Spawner) {
                 .checked()
         });
 
-    let (p, _clk) = sifli_hal::init(config);
+    let p = sifli_hal::init(config);
 
     // 2. LCDC Configuration
     let config = sifli_hal::lcdc::Config {

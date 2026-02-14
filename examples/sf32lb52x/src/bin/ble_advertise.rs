@@ -46,7 +46,7 @@ struct BatteryService {
 
 #[embassy_executor::main]
 async fn main(_spawner: embassy_executor::Spawner) {
-    let (p, _clk) = sifli_hal::init(Default::default());
+    let p = sifli_hal::init(Default::default());
 
     info!("=== BLE Advertise Example ===");
 

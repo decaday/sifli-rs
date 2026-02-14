@@ -36,7 +36,7 @@ async fn main(_spawner: Spawner) {
                 .checked()
         });
 
-    let (p, _clk) = sifli_hal::init(config);
+    let p = sifli_hal::init(config);
 
     info!("Clock configuration complete");
     rcc::test_print_clocks();

@@ -54,7 +54,7 @@ async fn main(_spawner: Spawner) {
                 .with_mux(sifli_hal::rcc::ClockMux::new().with_usbsel(Usbsel::Dll2))
                 .checked()
         });
-    let (p, _clk) = sifli_hal::init(config);
+    let p = sifli_hal::init(config);
 
     sifli_hal::rcc::test_print_clocks();
 
