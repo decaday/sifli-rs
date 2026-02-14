@@ -7,11 +7,7 @@ use crate::pac::{HPSYS_AON, HPSYS_RCC};
 use crate::time::Hertz;
 use core::sync::atomic::{compiler_fence, Ordering};
 
-use super::{
-    get_clk_dll2_freq, get_hclk_freq, get_lpsys_clk_peri_freq, get_lpsys_hclk_freq,
-    get_lpsys_mac_clk_freq, get_lpsys_pclk1_freq, get_lpsys_pclk2_freq, get_lpsys_sysclk_freq,
-    get_pclk_freq, get_clk_sys_freq,
-};
+use super::{get_clk_dll2_freq, get_clk_sys_freq, get_hclk_freq, get_pclk_freq};
 use super::{CLK_HRC48_FREQ, CLK_HXT48_FREQ, CLK_LRC10_FREQ, CLK_LRC32_FREQ};
 use super::{
     ClockMux, Clocks, Dll, DllStage, HclkPrescaler, Mpisel, PclkPrescaler, Rtcsel, Sysclk,
@@ -503,14 +499,6 @@ fn read_hpsys_clocks_from_hw() -> Clocks {
         // Audio PLL is managed by AUDCODEC driver, default to None here
         clk_aud_pll: None.into(),
         clk_aud_pll_div16: None.into(),
-
-        // LPSYS clocks - read from hardware
-        lp_sysclk: get_lpsys_sysclk_freq().into(),
-        lp_hclk: get_lpsys_hclk_freq().into(),
-        lp_pclk1: get_lpsys_pclk1_freq().into(),
-        lp_pclk2: get_lpsys_pclk2_freq().into(),
-        lp_clk_peri: get_lpsys_clk_peri_freq().into(),
-        lp_mac_clk: get_lpsys_mac_clk_freq().into(),
     }
 }
 
@@ -528,46 +516,12 @@ fn read_hpsys_clocks_from_hw() -> Clocks {
 ///
 /// Use [`ConfigBuilder::sysclk()`] to create a configuration suitable for runtime switching.
 ///
-/// # Peripherals that borrow clock tokens
-///
-/// Drivers that take `&'d Pclk` or `&'d Hclk` at construction hold the borrow for
-/// their entire lifetime, preventing this function from obtaining `&mut` access.
-/// This is intentional — especially for **async** drivers where an operation may be
-/// `.await`-ing (e.g. [`Adc::read()`]) in one task while another task attempts to
-/// switch clocks. The lifetime bound catches this conflict at compile time.
-///
-/// Which clock a peripheral borrows is determined by the `clock` field in
-/// `data/sf32lb52x/peripherals.yaml`, which maps to the associated type
-/// `<T as RccGetFreq>::Clock`. Currently:
-///
-/// - **`Pclk`**: GPADC, TSEN, GPTIM1, BTIM1, ATIM1, EFUSEC, TRNG, MAILBOX1
-/// - **`Hclk`**: EXTDMA, EZIP1, EPIC, LCDC1, AES, SDMMC1, CRC1, PTC1, DMAC1, GPIO
-///
-/// Note: USART, SPI, I2C use `ClkPeri` (fixed 48 MHz), so they do **not** conflict.
-///
-/// # Usage with conflicting peripherals
-///
-/// Drop the driver before switching, then recreate it. Pass `&mut` borrows
-/// (instead of moving the singleton) so the peripheral can be reused:
-///
-/// ```rust,ignore
-/// // Use &mut so the singleton is not consumed
-/// let mut adc = Adc::new_blocking(&mut p.GPADC, &clk.pclk, Default::default());
-/// let sample = adc.blocking_read(&mut ch).unwrap();
-/// drop(adc); // releases &Pclk and &mut GPADC
-///
-/// reconfigure_sysclk(&mut clk.hclk, &mut clk.pclk, &mut clk.pclk2, new_cfg);
-///
-/// // Recreate — adjust Config if the new PCLK frequency requires different timing
-/// let mut adc = Adc::new_blocking(&mut p.GPADC, &clk.pclk, Default::default());
-/// ```
+/// // TODO: once peripheral drivers start borrowing `&'d Hclk` / `&'d Pclk` tokens,
+/// // this function should take `&mut Hclk, &mut Pclk, &mut Pclk2` to enforce at
+/// // compile time that no peripheral is using those clock domains during reconfiguration.
+/// // Currently no driver borrows these tokens, so the mechanism is not yet active.
 #[cfg(not(feature = "time-driver-gptim1"))]
-pub fn reconfigure_sysclk(
-    _hclk: &mut super::Hclk,
-    _pclk: &mut super::Pclk,
-    _pclk2: &mut super::Pclk2,
-    config: Config,
-) {
+pub fn reconfigure_sysclk(config: Config) {
     let config = &config.0;
     let current_hclk = get_hclk_freq().unwrap_or(Hertz(48_000_000));
     let target_hclk = config.get_hclk_freq();

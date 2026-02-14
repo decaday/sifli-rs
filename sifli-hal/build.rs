@@ -337,15 +337,17 @@ fn generate_rcc_impls(
     }
 
     // Generate RccGetFreq for LCPU peripherals
+    // LPSYS clocks read directly from hardware (not from cached CLOCK_FREQS),
+    // because LCPU may change LPSYS clocks independently.
     for peripheral in &peripherals.lcpu {
         if let Some(clock) = peripheral.clock.clone() {
-            let clock_name_ident = format_ident!("{}", clock);
             let clock_token_type = clock_to_token_type(&clock);
             let peripheral_name_ident = format_ident!("{}", peripheral.name);
+            let freq_expr = lpsys_clock_to_hw_read(&clock);
             let impl_tokens = quote! {
                 impl crate::rcc::SealedRccGetFreq for #peripheral_name_ident {
                     fn get_freq() -> Option<Hertz> {
-                        crate::rcc::clocks().#clock_name_ident.into()
+                        #freq_expr
                     }
                 }
                 impl crate::rcc::RccGetFreq for #peripheral_name_ident {
@@ -358,6 +360,14 @@ fn generate_rcc_impls(
     }
 
     implementations
+}
+
+fn lpsys_clock_to_hw_read(clock: &str) -> TokenStream {
+    match clock {
+        "lp_hclk" => quote! { crate::rcc::get_lpsys_hclk_freq() },
+        "lp_mac_clk" => quote! { crate::rcc::get_lpsys_mac_clk_freq() },
+        _ => panic!("Unknown LPSYS clock domain: {}", clock),
+    }
 }
 
 fn clock_to_token_type(clock: &str) -> TokenStream {

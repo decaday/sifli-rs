@@ -28,8 +28,32 @@ define_clock_token!(ClkMpi1, clk_mpi1);
 define_clock_token!(ClkMpi2, clk_mpi2);
 define_clock_token!(ClkAudPll, clk_aud_pll);
 define_clock_token!(ClkAudPllDiv16, clk_aud_pll_div16);
-define_clock_token!(LpHclk, lp_hclk);
-define_clock_token!(LpMacClk, lp_mac_clk);
+/// LPSYS HCLK token — always reads from hardware registers,
+/// because LPSYS clocks may be changed by LCPU independently.
+pub struct LpHclk {
+    _private: (),
+}
+impl LpHclk {
+    pub(crate) fn new() -> Self {
+        Self { _private: () }
+    }
+    pub fn frequency(&self) -> Option<Hertz> {
+        crate::rcc::get_lpsys_hclk_freq()
+    }
+}
+
+/// LPSYS MAC clock token — always reads from hardware registers.
+pub struct LpMacClk {
+    _private: (),
+}
+impl LpMacClk {
+    pub(crate) fn new() -> Self {
+        Self { _private: () }
+    }
+    pub fn frequency(&self) -> Option<Hertz> {
+        crate::rcc::get_lpsys_mac_clk_freq()
+    }
+}
 
 /// All clock tokens collected together.
 ///

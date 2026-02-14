@@ -266,17 +266,4 @@ pub struct Clocks {
     /// Audio PLL / 16 clock
     pub clk_aud_pll_div16: MaybeHertz,
 
-    // === LPSYS clocks ===
-    /// LPSYS system clock (clk_lpsys)
-    pub lp_sysclk: MaybeHertz,
-    /// LPSYS AHB clock (hclk_lpsys)
-    pub lp_hclk: MaybeHertz,
-    /// LPSYS APB1 clock (pclk1_lpsys)
-    pub lp_pclk1: MaybeHertz,
-    /// LPSYS APB2 clock (pclk2_lpsys)
-    pub lp_pclk2: MaybeHertz,
-    /// LPSYS peripheral clock (clk_peri_lpsys)
-    pub lp_clk_peri: MaybeHertz,
-    /// LPSYS MAC clock
-    pub lp_mac_clk: MaybeHertz,
 }

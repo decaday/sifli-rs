@@ -69,7 +69,7 @@ struct BatteryService {
 
 #[embassy_executor::main]
 async fn main(_spawner: Spawner) {
-    let (p, mut clk) = sifli_hal::init(Default::default());
+    let (p, clk) = sifli_hal::init(Default::default());
 
     let mut uart_config = UsartConfig::default();
     uart_config.baudrate = 1_000_000;
@@ -130,7 +130,7 @@ async fn main(_spawner: Spawner) {
 
     // --- Switch to LP before entering advertising loop ---
     info!("Entering low-power advertising mode (48 MHz)");
-    reconfigure_sysclk(&mut clk.hclk, &mut clk.pclk, &mut clk.pclk2, LP_MODE);
+    reconfigure_sysclk(LP_MODE);
     print_clocks("LP mode");
 
     let _ = join(
@@ -148,7 +148,7 @@ async fn main(_spawner: Spawner) {
                     Ok(conn) => {
                         // Connected — switch to 240 MHz for performance
                         info!("Connected! Switching to 240 MHz");
-                        reconfigure_sysclk(&mut clk.hclk, &mut clk.pclk, &mut clk.pclk2, HP_MODE);
+                        reconfigure_sysclk(HP_MODE);
                         print_clocks("HP mode");
                         unwrap!(usart.write_all(b"[240MHz] BLE connected\r\n").await);
 
@@ -158,7 +158,7 @@ async fn main(_spawner: Spawner) {
 
                         // Disconnected — switch back to 48 MHz
                         info!("Disconnected, back to 48 MHz");
-                        reconfigure_sysclk(&mut clk.hclk, &mut clk.pclk, &mut clk.pclk2, LP_MODE);
+                        reconfigure_sysclk(LP_MODE);
                         print_clocks("LP mode");
                         unwrap!(usart.write_all(b"[48MHz] BLE disconnected\r\n").await);
                     }
